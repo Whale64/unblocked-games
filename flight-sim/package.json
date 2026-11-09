@@ -1,0 +1,15 @@
+{
+  "name": "skyward-flight-sim",
+  "version": "1.0.0",
+  "private": true,
+  "description": "High-fidelity 3D browser flight simulator (single-file build)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0",
+    "three": "0.180.0"
+  }
+}

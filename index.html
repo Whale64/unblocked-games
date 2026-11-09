@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unblocked Games</title>
+<style>
+:root { --bg: #070c14; --card: #0f1826; --line: rgba(160,200,255,.15); --text: #e8f0fa; --muted: #8fa3bb; --accent: #5cc8ff; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 50% 0%, #13304d 0%, var(--bg) 60%); color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+h1 { font-size: clamp(28px, 6vw, 48px); letter-spacing: .12em; margin: 0 0 8px; }
+p.sub { color: var(--muted); margin: 0 0 36px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; width: min(900px, 100%); }
+a.card { display: block; text-decoration: none; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; transition: transform .15s, border-color .15s; }
+a.card:hover { transform: translateY(-3px); border-color: var(--accent); }
+.card h2 { margin: 0 0 6px; font-size: 22px; }
+.card p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.tag { display: inline-block; margin-top: 14px; font-size: 12px; color: var(--accent); }
+</style>
+</head>
+<body>
+<h1>UNBLOCKED GAMES</h1>
+<p class="sub">Browser games that each run from a single file, with no install.</p>
+<div class="grid">
+	<a class="card" href="flight-sim/index.html">
+		<h2>✈ Skyward Flight Simulator</h2>
+		<p>A 3D flight simulator with 6-DOF physics, volumetric clouds, a physically based sky, procedural mountains and oceans, ILS approaches, and a piston trainer plus a supersonic jet.</p>
+		<span class="tag">Play →</span>
+	</a>
+</div>
+</body>
+</html>
