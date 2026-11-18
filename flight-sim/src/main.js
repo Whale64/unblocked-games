@@ -14,19 +14,20 @@ import { HUD, computeApproach } from './hud.js';
 import { Audio } from './audio.js';
 import { Effects } from './effects.js';
 import { spawnAircraft } from './spawn.js';
+import { HeightField, patchWorldLighting } from './worldlight.js';
 
 const QUALITY = {
-	low: { pixelRatio: 0.75, msaa: 0, cloudScale: 0.33, cloudSteps: 28, bloom: false, shadows: 0, terrainN: 24, terrainSplit: 1.6, terrainMaxLevel: 6, treeRadius: 900, treeDensity: 0.45, treeShadows: false },
-	medium: { pixelRatio: 1, msaa: 2, cloudScale: 0.4, cloudSteps: 40, bloom: true, shadows: 1024, terrainN: 32, terrainSplit: 1.9, terrainMaxLevel: 6, treeRadius: 1700, treeDensity: 0.7, treeShadows: false },
-	high: { pixelRatio: 1.5, msaa: 4, cloudScale: 0.5, cloudSteps: 56, bloom: true, shadows: 2048, terrainN: 32, terrainSplit: 2.3, terrainMaxLevel: 7, treeRadius: 2500, treeDensity: 1.0, treeShadows: true },
-	ultra: { pixelRatio: 2, msaa: 4, cloudScale: 0.6, cloudSteps: 84, bloom: true, shadows: 4096, terrainN: 48, terrainSplit: 2.7, terrainMaxLevel: 7, treeRadius: 3400, treeDensity: 1.3, treeShadows: true },
+	low: { pixelRatio: 0.75, msaa: 0, cloudScale: 0.35, cloudSteps: 20, bloom: false, godRays: false, shadows: 0, terrainN: 24, terrainSplit: 1.6, terrainMaxLevel: 6, treeRadius: 1500, treeNear: 450, treeDensity: 0.5, treeShadows: false, texSize: 256 },
+	medium: { pixelRatio: 1, msaa: 2, cloudScale: 0.42, cloudSteps: 30, bloom: true, godRays: true, shadows: 1024, terrainN: 32, terrainSplit: 1.9, terrainMaxLevel: 6, treeRadius: 2600, treeNear: 700, treeDensity: 0.75, treeShadows: false, texSize: 512 },
+	high: { pixelRatio: 1.5, msaa: 4, cloudScale: 0.5, cloudSteps: 42, bloom: true, godRays: true, shadows: 2048, terrainN: 32, terrainSplit: 2.3, terrainMaxLevel: 7, treeRadius: 3600, treeNear: 1000, treeDensity: 1.0, treeShadows: true, texSize: 512 },
+	ultra: { pixelRatio: 2, msaa: 4, cloudScale: 0.6, cloudSteps: 64, bloom: true, godRays: true, shadows: 4096, terrainN: 48, terrainSplit: 2.7, terrainMaxLevel: 7, treeRadius: 5000, treeNear: 1400, treeDensity: 1.3, treeShadows: true, texSize: 1024 },
 };
 const WEATHER = {
-	clear: { coverage: 0, base: 1500, top: 2600, density: 0.03, haze: 3.6e-5 },
-	few: { coverage: 0.3, base: 1500, top: 2500, density: 0.035, haze: 4.8e-5 },
-	scattered: { coverage: 0.44, base: 1300, top: 2900, density: 0.035, haze: 5.5e-5 },
-	broken: { coverage: 0.6, base: 1100, top: 3000, density: 0.04, haze: 9e-5 },
-	overcast: { coverage: 0.82, base: 900, top: 2700, density: 0.045, haze: 1.3e-4 },
+	clear: { coverage: 0, base: 1500, top: 2600, density: 0.03, haze: 3.6e-5, cirrus: 0.25 },
+	few: { coverage: 0.3, base: 1500, top: 2500, density: 0.035, haze: 4.8e-5, cirrus: 0.7 },
+	scattered: { coverage: 0.44, base: 1300, top: 2900, density: 0.035, haze: 5.5e-5, cirrus: 0.55 },
+	broken: { coverage: 0.6, base: 1100, top: 3000, density: 0.04, haze: 9e-5, cirrus: 0.3 },
+	overcast: { coverage: 0.82, base: 900, top: 2700, density: 0.045, haze: 1.3e-4, cirrus: 0 },
 };
 const SPAWNS = {
 	runway: { label: 'Runway 10 · Skyward Intl', kind: 'runway', ap: 0 },
@@ -80,8 +81,13 @@ class Game {
 		await progress(0.02, 'Initialising renderer…');
 		const canvas = $('gl');
 		let renderer;
+		// Reversed-Z float depth keeps early-Z culling and gives better precision than a log depth buffer.
+		let reversed = false;
+		try { const pc = document.createElement('canvas').getContext('webgl2'); reversed = !!(pc && pc.getExtension('EXT_clip_control')); } catch { reversed = false; }
+		if (/[?&]logdepth/.test(location.search)) reversed = false;
+		this.reversedDepth = reversed;
 		try {
-			renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance', stencil: false });
+			renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: !reversed, reversedDepthBuffer: reversed, powerPreference: 'high-performance', stencil: false });
 		} catch (e) {
 			$('load-msg').textContent = 'WebGL 2 is required to run this simulator.';
 			throw e;
@@ -109,11 +115,12 @@ class Game {
 
 		const q = QUALITY[this.settings.quality] || QUALITY.high;
 		this.quality = q;
-		this.post = new PostFX(renderer, this.atm, this.cloudTex);
+		this.post = new PostFX(renderer, this.atm, this.cloudTex, reversed);
 		this.post.setQuality(q);
 
-		await progress(0.45, 'Planting forests & painting farmland…');
-		this.terrain = new Terrain(this.scene, this.cloudTex, q);
+		await progress(0.45, 'Synthesising PBR terrain textures, planting forests…');
+		this.terrain = new Terrain(this.scene, this.cloudTex, q, renderer);
+		this.heightField = new HeightField(renderer);
 
 		await progress(0.55, 'Building airports, lights & hangars…');
 		const parkedCfg = AIRCRAFT.sparrow;
@@ -122,6 +129,7 @@ class Game {
 			m.disc.visible = false; m.pilot.visible = false;
 			return m.root;
 		});
+		this.patchLighting(this.airports.group);
 
 		this.sun = new THREE.DirectionalLight(0xffffff, 1);
 		this.sun.castShadow = q.shadows > 0;
@@ -155,6 +163,7 @@ class Game {
 		const ap = airports[0];
 		this.camera.lookAt(ap.x, ap.elev, ap.z);
 		this.atm.update(this.camera.position.y, 0, 1);
+		this.heightField.update(this.camera.position, this.atm.lightDir, true);
 		for (let i = 0; i < 6; i++) {
 			const left = this.terrain.update(this.camera.position, 1e9, true);
 			await progress(0.65 + i * 0.05, `Streaming terrain tiles… (${left} queued)`);
@@ -171,6 +180,20 @@ class Game {
 		$('menu').classList.remove('hidden');
 		this.last = performance.now();
 		requestAnimationFrame((t) => this.loop(t));
+	}
+
+	// Give every lit material in a subtree per-pixel cloud & terrain shadows / terrain AO.
+	patchLighting(root) {
+		this._patched = this._patched || new WeakSet();
+		root.traverse((o) => {
+			const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+			for (const m of mats) {
+				if (!m.isMeshStandardMaterial || this._patched.has(m)) continue;
+				this._patched.add(m);
+				patchWorldLighting(m, { key: 'obj' });
+				m.needsUpdate = true;
+			}
+		});
 	}
 
 	buildMapImage() {
@@ -193,7 +216,7 @@ class Game {
 
 	applyWeather() {
 		const w = WEATHER[this.settings.weather] || WEATHER.scattered;
-		Object.assign(this.env, { coverage: w.coverage, cloudBase: w.base, cloudTop: w.top, cloudDensity: w.density, haze: w.haze });
+		Object.assign(this.env, { coverage: w.coverage, cloudBase: w.base, cloudTop: w.top, cloudDensity: w.density, haze: w.haze, cirrus: w.cirrus });
 	}
 
 	resize() {
@@ -281,6 +304,7 @@ class Game {
 		this.cfg = cfg;
 		if (this.model) { this.scene.remove(this.model.root); }
 		this.model = buildAircraft(cfg);
+		this.patchLighting(this.model.root);
 		this.scene.add(this.model.root);
 		this.fm = new FlightModel(cfg);
 		const sp = SPAWNS[s.spawn] || SPAWNS.runway;
@@ -312,8 +336,16 @@ class Game {
 		this.hud.toasts = [];
 		this.hud.toast(`${cfg.name} · ${sp.label.replace('10', String(airports[sp.ap].numA).padStart(2, '0'))}`, '#cfe8ff', 4);
 		if (sp.kind === 'runway') this.hud.toast('Throttle up (Shift / R), rotate at ' + cfg.vr + ' kt (S / ↓)', '#ffffff', 6);
-		// pre-stream terrain at the spawn
+		// pre-stream terrain at the spawn and compile every shader variant up front (avoids first-use hitches)
 		this.terrain.update(this.fm.pos, 1e9, true);
+		this.warmup();
+	}
+
+	warmup() {
+		const hidden = [];
+		this.scene.traverse((o) => { if (!o.visible && (o.isMesh || o.isPoints)) { hidden.push(o); o.visible = true; } });
+		try { this.renderer.compile(this.scene, this.camera); } catch (e) { console.warn(e); }
+		for (const o of hidden) o.visible = false;
 	}
 
 	toMenu() {
@@ -620,9 +652,10 @@ class Game {
 			const cov = sampleCoverageCPU(this.cloudTex.weatherData, focus.x + L.x * tt, focus.z + L.z * tt, env.cloudOffset, env.coverage);
 			cs = focus.y < env.cloudTop ? 1 - cov * 0.85 : 1;
 		}
+		if (this.heightField && this.heightField.ready && focus.y - Math.max(getHeight(focus.x, focus.z), 0) < 400) cs *= this.heightField.sunVisibilityCPU(focus, atm.lightDir);
 		this.cloudShadow = cs;
 		this.sun.color.copy(atm.lightColor);
-		this.sun.intensity = atm.lightIntensity * cs;
+		this.sun.intensity = atm.lightIntensity; // cloud & terrain shadows are applied per pixel
 		const sr = this.cfg && this.cfg.engine === 'jet' ? 55 : 40;
 		this.sun.shadow.camera.left = -sr; this.sun.shadow.camera.right = sr;
 		this.sun.shadow.camera.top = sr; this.sun.shadow.camera.bottom = -sr;
@@ -642,7 +675,7 @@ class Game {
 		const moonE = 0.05 * atm.night;
 		const E = sunE + skyE + moonE + 0.02;
 		// partial adaptation: the eye/camera does not fully compensate for dusk and night
-		const target = THREE.MathUtils.clamp(Math.pow(Math.PI * 1.25 / E, 0.8) * 0.72, 0.08, 9);
+		const target = THREE.MathUtils.clamp(Math.pow(Math.PI * 1.25 / E, 0.76) * 0.7, 0.08, 9);
 		this.exposure = Math.exp(THREE.MathUtils.lerp(Math.log(this.exposure), Math.log(target), 1 - Math.exp(-dt * 1.2)));
 		env.exposure = this.exposure;
 		this.terrain.setEnv(env, atm.lightDir, this.time);
@@ -727,6 +760,7 @@ class Game {
 		this.fade = Math.max(0, (this.fade || 0) - dt * 1.2);
 		this.updateLighting(dt);
 		this.terrain.update(this.camera.position, 4);
+		this.heightField.update(this.camera.position, this.atm.lightDir);
 		const windV = this.fm ? this.fm.windBase : new THREE.Vector3();
 		const lightCol = new THREE.Color().copy(this.atm.lightColor).multiplyScalar(this.atm.lightIntensity * Math.max(this.atm.lightDir.y, 0.05) * 0.25 * this.cloudShadow).add(new THREE.Color(0.25, 0.3, 0.38).multiplyScalar(SUN_INTENSITY * 0.05 * sstep(this.atm.sunDir.y, -0.1, 0.3) + 0.01));
 		this.smokeLight = lightCol;

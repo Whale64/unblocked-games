@@ -2,6 +2,28 @@
 // threshold/end, approach lights with sequenced flashers and PAPI with real 2.5-3.5 deg transitions).
 import * as THREE from 'three';
 import { airports, fromRunwayLocal, getHeight } from './world.js';
+import { skin, skinMat } from './aircraft-model.js';
+
+let _mats = null;
+function buildingMaterials() {
+	if (_mats) return _mats;
+	const corr = skin(512, 512, 0.45, (g, W, H) => {
+		g.fillStyle = '#8f969c'; g.fillRect(0, 0, W, H);
+		for (let x = 0; x < W; x += 16) { const gr = g.createLinearGradient(x, 0, x + 16, 0); gr.addColorStop(0, 'rgba(255,255,255,0.10)'); gr.addColorStop(0.5, 'rgba(0,0,0,0.10)'); gr.addColorStop(1, 'rgba(255,255,255,0.10)'); g.fillStyle = gr; g.fillRect(x, 0, 16, H); }
+		const st = g.createLinearGradient(0, 0, 0, H); st.addColorStop(0, 'rgba(60,50,40,0)'); st.addColorStop(1, 'rgba(60,50,40,0.25)'); g.fillStyle = st; g.fillRect(0, 0, W, H);
+	}, { frames: [0.25, 0.5, 0.75], stringers: [0.5], hatches: 0 }, null, 51, 3.0, (b, W, H) => {
+		for (let x = 0; x < W; x += 16) { const gr = b.createLinearGradient(x, 0, x + 16, 0); gr.addColorStop(0, 'rgb(90,90,90)'); gr.addColorStop(0.5, 'rgb(190,190,190)'); gr.addColorStop(1, 'rgb(90,90,90)'); b.fillStyle = gr; b.fillRect(x, 0, 16, H); }
+	});
+	for (const t of [corr.map, corr.normalMap, corr.roughnessMap]) t.repeat.set(5, 1);
+	const conc = skin(512, 512, 0.9, (g, W, H) => {
+		g.fillStyle = '#b9b5ad'; g.fillRect(0, 0, W, H);
+		for (let i = 0; i < 400; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? 255 : 60},${Math.random() > 0.5 ? 250 : 60},${Math.random() > 0.5 ? 240 : 60},0.05)`; const r = 4 + Math.random() * 40; g.beginPath(); g.arc(Math.random() * W, Math.random() * H, r, 0, 7); g.fill(); }
+		const st = g.createLinearGradient(0, 0, 0, H); st.addColorStop(0, 'rgba(70,60,50,0)'); st.addColorStop(1, 'rgba(70,60,50,0.3)'); g.fillStyle = st; g.fillRect(0, 0, W, H);
+	}, { frames: [0.33, 0.66], stringers: [0.33, 0.66], hatches: 0 }, null, 53, 1.5);
+	for (const t of [conc.map, conc.normalMap, conc.roughnessMap]) t.repeat.set(3, 1);
+	_mats = { metal: skinMat(corr, { metalness: 0.65 }), concrete: skinMat(conc, {}) };
+	return _mats;
+}
 
 function windowTexture(cols, rows, lit) {
 	const c = document.createElement('canvas');
@@ -163,7 +185,8 @@ export class Airports {
 		}
 
 		// ------------------------------------------------ buildings
-		const conc = new THREE.MeshStandardMaterial({ color: 0xb9b5ad, roughness: 0.85 });
+		const bm = buildingMaterials();
+		const conc = bm.concrete;
 		const darkRoof = new THREE.MeshStandardMaterial({ color: 0x3d4045, roughness: 0.7, metalness: 0.3 });
 		const glassDay = windowTexture(24, 3, false), glassNight = windowTexture(24, 3, true);
 		const termMat = new THREE.MeshStandardMaterial({ map: glassDay, emissiveMap: glassNight, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.25, metalness: 0.4 });
@@ -197,11 +220,11 @@ export class Airports {
 			this.beacons.push(P(150, 375, 48));
 		}
 		// hangars with curved roofs
-		const hangarMat = new THREE.MeshStandardMaterial({ color: 0x8e9499, roughness: 0.5, metalness: 0.6 });
+		const hangarMat = bm.metal;
 		const nH = ap.main ? 4 : 2;
 		for (let i = 0; i < nH; i++) {
 			const u = (ap.main ? 260 : -120) + i * 70;
-			const base = box(55, 9, 60, conc);
+			const base = box(55, 9, 60, hangarMat);
 			place(base, u, 380, 4.5);
 			const roofG = new THREE.CylinderGeometry(36.2, 36.2, 60, 24, 1, false, Math.PI / 2 - Math.PI * 0.275, Math.PI * 0.55);
 			roofG.rotateZ(Math.PI / 2);

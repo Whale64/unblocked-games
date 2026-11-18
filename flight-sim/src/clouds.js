@@ -85,6 +85,12 @@ export function fbm2Tile(x, y, P, oct, seed) {
 	return s / n;
 }
 
+export const DEPTH_GLSL = /* glsl */`
+uniform float uDepthMode, uNear, uFar, uLogF;
+bool isSkyDepth(float d) { return uDepthMode > 0.5 ? d <= 0.0 : d >= 0.999999; }
+float depthViewZ(float d) { return uDepthMode > 0.5 ? uFar / (1.0 + d * (uFar - uNear) / uNear) : exp2(d * uLogF) - 1.0; }
+`;
+
 export const WEATHER_SIZE = 256;
 export const WEATHER_SCALE = 36000; // metres covered by one tile of the weather map
 
@@ -182,7 +188,8 @@ export function createCloudMaterial(tex, skyLUT, depthTex) {
 			uInvProj: { value: new THREE.Matrix4() },
 			uCamWorld: { value: new THREE.Matrix4() },
 			uCamPos: { value: new THREE.Vector3() },
-			uLogF: { value: 1 },
+			uLogF: { value: 1 }, uDepthMode: { value: 0 }, uNear: { value: 0.3 }, uFar: { value: 140000 },
+			tHistory: { value: null }, uPrevViewProj: { value: new THREE.Matrix4() }, uHistoryWeight: { value: 0 }, uFrame: { value: 0 },
 			uLightDir: { value: new THREE.Vector3(0, 1, 0) },
 			uSunLight: { value: new THREE.Color(1, 1, 1) },
 			uGroundBounce: { value: new THREE.Color(0, 0, 0) },
@@ -198,10 +205,11 @@ export function createCloudMaterial(tex, skyLUT, depthTex) {
 precision highp float;
 ${ATMOS_GLSL}
 ${CLOUD_DENSITY_GLSL}
-uniform sampler2D tDepth;
-uniform mat4 uInvProj, uCamWorld;
+${DEPTH_GLSL}
+uniform sampler2D tDepth, tHistory;
+uniform mat4 uInvProj, uCamWorld, uPrevViewProj;
 uniform vec3 uCamPos;
-uniform float uLogF;
+uniform float uHistoryWeight, uFrame;
 uniform vec3 uLightDir;
 uniform vec3 uSunLight, uGroundBounce, uNightSky;
 uniform int uSteps;
@@ -211,15 +219,15 @@ varying vec2 vUv;
 
 float lightMarch(vec3 p, float h) {
 	float tau = 0.0;
-	float st = (uTop - uBase) * 0.06;
+	float st = (uTop - uBase) * 0.07;
 	float t = 0.0;
-	for (int j = 0; j < 6; j++) {
+	for (int j = 0; j < 5; j++) {
 		float tm = t + st * 0.5;
 		vec3 q = p + uLightDir * tm;
 		float hq = h + uLightDir.y * tm;
-		tau += cloudDensity(q, hq, j < 2) * uDensity * st;
+		tau += cloudDensity(q, hq, j < 1) * uDensity * st;
 		t += st;
-		st *= 1.7;
+		st *= 1.9;
 	}
 	return tau;
 }
@@ -232,10 +240,11 @@ void main() {
 
 	// farthest depth of the 2x2 full-res footprint
 	vec2 px = 0.5 / uFullRes;
-	float d = max(max(texture2D(tDepth, vUv + vec2(-px.x, -px.y)).x, texture2D(tDepth, vUv + vec2(px.x, -px.y)).x),
-	              max(texture2D(tDepth, vUv + vec2(-px.x, px.y)).x, texture2D(tDepth, vUv + vec2(px.x, px.y)).x));
+	float d0 = texture2D(tDepth, vUv + vec2(-px.x, -px.y)).x, d1 = texture2D(tDepth, vUv + vec2(px.x, -px.y)).x;
+	float d2 = texture2D(tDepth, vUv + vec2(-px.x, px.y)).x, d3 = texture2D(tDepth, vUv + vec2(px.x, px.y)).x;
+	float d = uDepthMode > 0.5 ? min(min(d0, d1), min(d2, d3)) : max(max(d0, d1), max(d2, d3));
 	float sceneDist = 1e9;
-	if (d < 0.999999) sceneDist = (exp2(d * uLogF) - 1.0) / max(-dirV.z, 1e-4);
+	if (!isSkyDepth(d)) sceneDist = depthViewZ(d) / max(-dirV.z, 1e-4);
 
 	vec3 ro = vec3(0.0, A_RG + uCamPos.y, 0.0);
 	vec2 tIn = aRaySphere(ro, dir, A_RG + uBase);
@@ -258,7 +267,7 @@ void main() {
 	float seg = t1 - t0;
 	float dt = max(seg / float(uSteps), 25.0);
 	dt = min(dt, 900.0);
-	float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+	float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + uFrame * 0.6180339);
 	float t = t0 + dt * jitter;
 
 	float mu = dot(dir, uLightDir);
@@ -269,12 +278,16 @@ void main() {
 	float T = 1.0;
 	vec3 L = vec3(0.0);
 	float tw = 0.0, ws = 0.0;
+	int empty = 0;
 	for (int i = 0; i < 160; i++) {
 		if (i >= uSteps || t > t1) break;
 		vec3 p = uCamPos + dir * t;
 		float h = length(ro + dir * t) - A_RG;
 		float den = cloudDensity(p, h, t < 22000.0);
-		if (den > 0.003) {
+		// empty-space skipping: stride faster through clear air, refine once inside a cloud
+		if (den <= 0.003) { empty++; t += dt * (empty > 2 ? 1.8 : 1.0); continue; }
+		empty = 0;
+		{
 			float sigma = den * uDensity;
 			float tau = lightMarch(p, h);
 			float beer = exp(-tau);
@@ -297,7 +310,22 @@ void main() {
 	vec3 Tf = aerialTransmittance(uCamPos.y, dir, tAvg);
 	float alpha = 1.0 - T;
 	L = L * Tf + (aerialInscatter(dir) + uNightSky) * (1.0 - Tf) * alpha;
-	gl_FragColor = vec4(L, T);
+	vec4 cur = vec4(L, T);
+	// temporal accumulation: reproject the previous frame's clouds and blend (hides raymarch noise)
+	vec4 outc = cur;
+	if (uHistoryWeight > 0.0) {
+		vec3 P = uCamPos + dir * (ws > 0.0 ? tAvg : min(t1, 30000.0));
+		vec4 pc = uPrevViewProj * vec4(P, 1.0);
+		if (pc.w > 0.0) {
+			vec2 puv = pc.xy / pc.w * 0.5 + 0.5;
+			if (puv.x > 0.0 && puv.y > 0.0 && puv.x < 1.0 && puv.y < 1.0) {
+				vec4 hist = texture2D(tHistory, puv);
+				float w = uHistoryWeight * (1.0 - smoothstep(0.25, 0.6, abs(hist.a - cur.a)));
+				outc = mix(cur, hist, w);
+			}
+		}
+	}
+	gl_FragColor = outc;
 }
 `,
 	});

@@ -26,16 +26,19 @@ It needs no server, no install and no network access, so it works offline, from 
 
 ### Graphics
 - **Physically based sky**: Rayleigh, Mie and ozone single scattering are rendered into a sky-view lookup table every frame. Aerial perspective uses height-dependent extinction.
-- **Volumetric clouds**: raymarched through spherical cloud shells. The noise is tileable Perlin-Worley in 3D, lighting combines Beer-Powder with a multiple-scattering term and a two-lobe phase function, and clouds cast shadows on the terrain and the aircraft.
+- **Volumetric clouds**: raymarched through spherical cloud shells. The noise is tileable Perlin-Worley in 3D, lighting combines Beer-Powder with a multiple-scattering term and a two-lobe phase function, and clouds cast shadows on the terrain and the aircraft. A temporal reprojection pass accumulates samples across frames, so fewer raymarch steps are needed and the result is smoother. A high cirrus deck is drawn in the sky.
+- **Mountain shadows and terrain ambient occlusion**: a height field around the camera is streamed in the background, and the GPU bakes a sun "shadow ceiling" and horizon-based AO from it. Valleys fall into shadow at low sun, and terrain, trees, buildings and the aircraft all receive these shadows per pixel.
+- **God rays**: crepuscular rays are computed at quarter resolution from the sky, terrain and cloud occlusion.
 - **Terrain**: an endless quadtree LOD system with skirts. Heights are domain-warped ridged fractal noise, giving mountain ranges, coasts, beaches, snowlines, rock strata, forests and farmland patchwork.
+- **Procedural PBR textures**: at load time the GPU synthesises tileable albedo, height, normal, roughness and AO for grass, soil, rock, sand, snow, forest floor, asphalt, concrete and water ripples. Close to the camera these are height-blended into the terrain, with two-scale sampling to hide tiling and triplanar mapping on cliffs.
 - **Ocean**: wave normals follow the deep-water dispersion relation, and the water has depth-based colour, shore foam, sky reflections and sun glints.
 - **Airports**:
   - Runways are drawn procedurally to ICAO marking layout: threshold bars, designators, touchdown zone and aiming point, centreline, blast-pad chevrons, taxiways and hold-short lines.
   - Runway lighting includes edge, centreline and threshold/end lights, approach lights with sequenced flashers, and a **PAPI with real 2.5° to 3.5° transition angles**.
   - Each airport has terminals, a control tower, hangars, windsocks that respond to the wind, and parked aircraft.
-- **Trees**: instanced forests with shadows.
-- **Aircraft**: the fuselages are lofted superellipse shapes, the wings use NACA 4-digit airfoils, and all control surfaces are hinged and animated. Also modelled: propeller blur disc, afterburner plume with shock diamonds, retracting gear, strobe, beacon and navigation lights, a landing light, cockpit and pilot.
-- **Post-processing**: rendering is in HDR with MSAA, followed by bloom, ACES tone mapping, eye adaptation, lens flare with occlusion testing, and chromatic aberration. G-forces cause grey-out and red-out.
+- **Trees**: forests are instanced per 512 m cell so each cell can be frustum-culled. Nearby trees are 3D meshes with procedural leaf shading; distant trees switch to impostors baked from those same meshes.
+- **Aircraft**: the skins are PBR, with panel seams, rivets and access hatches in the normal map, plus roughness variation, exhaust soot and stencils. The fuselages are lofted superellipse shapes, the wings use NACA 4-digit airfoils, and all control surfaces are hinged and animated. Also modelled: propeller blur disc, afterburner plume with shock diamonds, retracting gear, strobe, beacon and navigation lights, a landing light, cockpit and pilot.
+- **Post-processing**: rendering is in HDR with MSAA and a reversed-Z float depth buffer, followed by bloom, ACES tone mapping with a filmic grade, eye adaptation, lens flare with occlusion testing, and chromatic aberration. G-forces cause grey-out and red-out.
 - **Effects**: wingtip vortices, vapour, contrails above 7.8 km, tyre smoke on touchdown, explosions and water splashes.
 - **Time of day**: the sun position is computed for a mid-latitude location. Nights have stars, a moon and runway lights.
 
@@ -95,6 +98,15 @@ Sound is synthesised live with WebAudio:
 ## Performance
 The game picks a graphics preset from the GPU on first run: Low, Medium, High or Ultra. While you fly, it also scales the rendering resolution to keep the frame rate playable. Choose **Low** on Chromebooks and older laptops.
 
+What keeps it fast:
+- **Reversed-Z float depth** keeps early-Z rejection; a logarithmic depth buffer is used only when `EXT_clip_control` is missing. You can force log depth with `?logdepth`.
+- **Clouds** render at reduced resolution and are temporally accumulated, with empty-space skipping and a shorter light march.
+- **Trees** are frustum-culled per cell and use impostors beyond about 1 km, so the shadow pass only draws trees near the aircraft.
+- **Detail texturing** on terrain is limited to about 3 km from the camera. Texture lookups use explicit gradients, so branches stay cheap.
+- **Physics** skips per-contact terrain queries when the aircraft is airborne, and the hot paths reuse vector temporaries.
+- **The HUD** draws cheap offset text shadows instead of blurred canvas shadows.
+- **Shaders** are compiled up front when a flight starts, to avoid first-use hitches.
+
 ## Development
 ```bash
 npm install
@@ -110,6 +122,8 @@ npm run watch    # rebuild on change
 | `src/world.js` | Terrain height field and airport placement |
 | `src/terrain.js` | LOD tiles, terrain/ocean/runway shader and forests |
 | `src/atmosphere.js` | Sky scattering LUT, sun and moon, environment maps |
+| `src/texgen.js` | GPU procedural PBR texture arrays |
+| `src/worldlight.js` | Cloud and terrain shadows, terrain AO bake, material patching |
 | `src/clouds.js` | Cloud noise textures and the raymarcher |
 | `src/postfx.js` | Composite, bloom, tone mapping and lens effects |
 | `src/airport.js` | Buildings and runway lighting |

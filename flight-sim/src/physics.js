@@ -145,7 +145,7 @@ export class FlightModel {
 		this.gustRoll += -this.gustRoll / 0.8 * dt + gauss() * Math.sqrt(2 * dt / 0.8) * this.turb * 0.02;
 
 		const wind = this.windAt(this.pos.y, agl);
-		const air = new THREE.Vector3().copy(this.vel).sub(wind).sub(this.gust);
+		const air = (this._air || (this._air = new THREE.Vector3())).copy(this.vel).sub(wind).sub(this.gust);
 		// body-frame air velocity (my axes)
 		const vbx = air.dot(right), vby = air.dot(up), vbz = air.dot(back);
 		const u = -vbz, v = vbx, w = -vby; // aero axes
@@ -295,18 +295,20 @@ export class FlightModel {
 		}
 
 		// convert to my body axes: x right, y up, z back
-		const Fb = new THREE.Vector3(Fya, -Fza, -Fxa - thrust);
-		const Mb = new THREE.Vector3(Ma, -Na, -Lx);
+		const Fb = (this._Fb || (this._Fb = new THREE.Vector3())).set(Fya, -Fza, -Fxa - thrust);
+		const Mb = (this._Mb || (this._Mb = new THREE.Vector3())).set(Ma, -Na, -Lx);
 
 		// world force
-		const F = new THREE.Vector3()
+		const F = (this._F || (this._F = new THREE.Vector3())).set(0, 0, 0)
 			.addScaledVector(right, Fb.x).addScaledVector(up, Fb.y).addScaledVector(back, Fb.z);
 		F.y -= c.mass * G;
 
 		// ---- ground contact
-		const contactF = new THREE.Vector3();
+		const contactF = (this._cF || (this._cF = new THREE.Vector3())).set(0, 0, 0);
 		let anyContact = false;
-		const gearUsable = this.gearPos > 0.95;
+		// skip the per-contact terrain queries entirely when well clear of the ground
+		const nearGround = agl < 14 || this.pos.y < 20;
+		const gearUsable = this.gearPos > 0.95 && nearGround;
 		const Rinv = _q.copy(this.quat).invert();
 		let tdLogged = false;
 		for (let i = 0; i < c.gear.length; i++) {
@@ -355,7 +357,7 @@ export class FlightModel {
 			}
 		}
 		// hull / airframe contact points
-		for (const hp of c.hull) {
+		for (const hp of (nearGround ? c.hull : [])) {
 			const pb = new THREE.Vector3(hp[0], hp[1], hp[2]);
 			const rel = pb.clone().applyQuaternion(this.quat);
 			const pw = rel.clone().add(this.pos);
@@ -393,7 +395,7 @@ export class FlightModel {
 		const sp = this.vel.length();
 		if (sp > 1) {
 			const vh = _v1.copy(this.vel).divideScalar(sp);
-			const upN = new THREE.Vector3().copy(up).addScaledVector(vh, -vh.dot(up));
+			const upN = (this._upN || (this._upN = new THREE.Vector3())).copy(up).addScaledVector(vh, -vh.dot(up));
 			if (upN.lengthSq() > 1e-6) {
 				upN.normalize();
 				const nzp = specific.dot(upN) / G;
@@ -402,18 +404,18 @@ export class FlightModel {
 		}
 
 		// ---- integrate rotation (Euler's equations, diagonal inertia)
-		const I = new THREE.Vector3(c.inertia.pitch, c.inertia.yaw, c.inertia.roll);
+		const I = (this._I || (this._I = new THREE.Vector3())).set(c.inertia.pitch, c.inertia.yaw, c.inertia.roll);
 		const w0 = this.omega;
-		const Iw = new THREE.Vector3(w0.x * I.x, w0.y * I.y, w0.z * I.z);
-		const gyro = new THREE.Vector3().crossVectors(w0, Iw);
+		const Iw = (this._Iw || (this._Iw = new THREE.Vector3())).set(w0.x * I.x, w0.y * I.y, w0.z * I.z);
+		const gyro = (this._gy || (this._gy = new THREE.Vector3())).crossVectors(w0, Iw);
 		const dw = Mb.sub(gyro);
 		this.omega.x += dw.x / I.x * dt;
 		this.omega.y += dw.y / I.y * dt;
 		this.omega.z += dw.z / I.z * dt;
 		// slight structural damping for stability on the ground
 		if (anyContact) this.omega.multiplyScalar(1 - 0.5 * dt);
-		const wq = new THREE.Quaternion(this.omega.x * dt * 0.5, this.omega.y * dt * 0.5, this.omega.z * dt * 0.5, 0);
-		const dq = this.quat.clone().multiply(wq);
+		const wq = (this._wq || (this._wq = new THREE.Quaternion())).set(this.omega.x * dt * 0.5, this.omega.y * dt * 0.5, this.omega.z * dt * 0.5, 0);
+		const dq = (this._dq || (this._dq = new THREE.Quaternion())).copy(this.quat).multiply(wq);
 		this.quat.x += dq.x; this.quat.y += dq.y; this.quat.z += dq.z; this.quat.w += dq.w;
 		this.quat.normalize();
 

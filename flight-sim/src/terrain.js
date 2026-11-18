@@ -1,7 +1,9 @@
 // Quadtree LOD terrain with procedural PBR shading, ocean, airports and instanced forests.
 import * as THREE from 'three';
 import { getHeight, airports, toRunwayLocal } from './world.js';
-import { fbm2Tile, WEATHER_SCALE } from './clouds.js';
+import { fbm2Tile } from './clouds.js';
+import { WORLD_LIGHT_GLSL, worldUniforms, patchWorldLighting } from './worldlight.js';
+import { generateLayerTextures } from './texgen.js';
 import { hash2, smoothstep } from './noise.js';
 
 export const MACRO_SIZE = 512;
@@ -68,16 +70,15 @@ function createDigitAtlas() {
 
 // ------------------------------------------------------------------ shader code
 const TERRAIN_PARS = /* glsl */`
+precision highp sampler2DArray;
 uniform sampler2D tMacro;
 uniform sampler2D tDigits;
-uniform sampler2D tWeather;
+uniform sampler2DArray tLayA;
+uniform sampler2DArray tLayN;
 uniform float uTime;
 uniform vec4 uRwyA[3];
 uniform vec4 uRwyB[3];
 uniform int uRwyCount;
-uniform vec3 uLightDir;
-uniform float uCoverage, uCloudMid, uCloudsOn;
-uniform vec2 uWind;
 varying vec3 vWPos;
 varying vec3 vWNormal;
 varying float vWater;
@@ -86,6 +87,15 @@ float tRough = 0.9;
 vec3 tN = vec3(0.0, 1.0, 0.0);
 float tCloudShadow = 1.0;
 float tWaterMask = 0.0;
+float tDetAO = 1.0;
+vec2 gX, gY; // world-xz screen derivatives (computed in uniform control flow)
+vec4 sA(vec3 p, vec2 dx, vec2 dy) { vec4 s = textureGrad(tLayA, p, dx, dy); s.rgb *= s.rgb; return s; }
+vec4 sN(vec3 p, vec2 dx, vec2 dy) { return textureGrad(tLayN, p, dx, dy); }
+vec3 layerMean(float l) { vec3 m = textureLod(tLayA, vec3(0.5, 0.5, l), 12.0).rgb; return max(m * m, vec3(0.003)); }
+vec3 topOff(vec4 n) { vec2 t = n.xy * 2.0 - 1.0; return vec3(t.x, 0.0, t.y); }
+float hblend(float w, float ha, float hb) {
+	return clamp((w - 0.5) * 3.0 + (hb - ha) * 1.8 * 4.0 * w * (1.0 - w) + 0.5, 0.0, 1.0) * smoothstep(0.0, 0.08, w);
+}
 
 float th12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p) {
@@ -144,7 +154,7 @@ float runwayPaint(float s, float t, float W, float L, float num, float aa, float
 	return p;
 }
 
-void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa) {
+void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa, vec4 aspT, vec4 conT, float texF, inout float pavOut) {
 	float lod = log2(max(aa * 2.0 * 128.0 / 6.6, 1.0));
 	for (int i = 0; i < 3; i++) {
 		if (i >= uRwyCount) break;
@@ -157,8 +167,8 @@ void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa) {
 		if (abs(u) > hl + 900.0 || v < -250.0 || v > 600.0) continue;
 		vec2 uv = vec2(u, v);
 		float n = vnoise(wp.xz * 0.35) * 0.5 + vnoise(wp.xz * 2.3) * 0.25 + vnoise(wp.xz * 0.04) * 0.25;
-		vec3 asphalt = vec3(0.036, 0.036, 0.038) * (0.8 + 0.45 * n);
-		vec3 concrete = vec3(0.28, 0.27, 0.25) * (0.85 + 0.3 * n);
+		vec3 asphalt = mix(vec3(0.036, 0.036, 0.038) * (0.8 + 0.45 * n), aspT.rgb * (0.85 + 0.3 * n), texF);
+		vec3 concrete = mix(vec3(0.28, 0.27, 0.25) * (0.85 + 0.3 * n), conT.rgb * (0.9 + 0.2 * n), texF);
 		float rw = rectAA(uv, vec2(-hl - 60.0, -hw - 7.5), vec2(hl + 60.0, hw + 7.5), aa);
 		float mainR = rectAA(uv, vec2(-hl, -hw), vec2(hl, hw), aa);
 		float twy = rectAA(uv, vec2(-hl - 30.0, 108.5), vec2(hl + 30.0, 131.5), aa);
@@ -210,7 +220,8 @@ void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa) {
 		float apronEdge = rectAA(uv, vec2(-430.0, 135.0), vec2(430.0, 135.4), aa);
 		yellow = max(yellow, max(max(tcl, hold), max(stand, apronEdge)) * (1.0 - mainR));
 		col = mix(col, pc, pav);
-		col = mix(col, vec3(0.62, 0.62, 0.6), white);
+		pavOut = max(pavOut, pav);
+		col = mix(col, vec3(0.62, 0.62, 0.6) * mix(1.0, 0.75 + 0.5 * aspT.a, texF), white);
 		col = mix(col, vec3(0.55, 0.38, 0.04), yellow);
 		rough = mix(rough, mix(0.75, 0.55, max(white, yellow)), pav);
 	}
@@ -235,18 +246,10 @@ vec2 waveSlope(vec2 p, float dist, float t) {
 	return g * 0.28 + vec2(hf, -hf * 0.7);
 }
 
-float cloudShadowAt(vec3 wp) {
-	if (uCloudsOn < 0.5) return 1.0;
-	vec3 L = uLightDir;
-	float tt = max(uCloudMid - wp.y, 0.0) / max(L.y, 0.08);
-	vec2 p = wp.xz + L.xz * tt;
-	float w = texture2D(tWeather, (p + uWind) / ${WEATHER_SCALE.toFixed(1)}).r;
-	float lc = smoothstep(1.0 - uCoverage, 1.0 - uCoverage + 0.35, w);
-	return 1.0 - lc * 0.85;
-}
-
 void terrainShade(inout vec3 col) {
 	vec3 wp = vWPos;
+	gX = dFdx(wp.xz); gY = dFdy(wp.xz);
+	vec3 g3x = dFdx(wp), g3y = dFdy(wp);
 	vec3 n = normalize(vWNormal);
 	float dist = length(wp - cameraPosition);
 	float slope = 1.0 - n.y;
@@ -254,18 +257,19 @@ void terrainShade(inout vec3 col) {
 	vec4 m = texture2D(tMacro, wp.xz / ${MACRO_SCALE.toFixed(1)});
 	float n1 = vnoise(wp.xz * 0.012);
 	float n2 = vnoise(wp.xz * 0.11);
-	float n3 = vnoise(wp.xz * 0.9);
-	float nearF = 1.0 - smoothstep(200.0, 1500.0, dist);
+	float nearT = 1.0 - smoothstep(900.0, 3200.0, dist);
 
+	// ---------------- macro colour (what you see from altitude)
 	vec3 grassA = vec3(0.085, 0.135, 0.038);
 	vec3 grassB = vec3(0.150, 0.175, 0.060);
 	vec3 dryG = vec3(0.20, 0.17, 0.09);
 	vec3 c = mix(grassA, grassB, n1);
-	c = mix(c, dryG, clamp(smoothstep(0.5, 0.9, m.a) * 0.75 + smoothstep(700.0, 1700.0, h) * 0.35, 0.0, 1.0));
-	c *= 0.82 + 0.36 * mix(0.5, n2, 0.8) + (n3 - 0.5) * 0.25 * nearF;
+	float dryW = clamp(smoothstep(0.5, 0.9, m.a) * 0.75 + smoothstep(700.0, 1700.0, h) * 0.35, 0.0, 1.0);
+	c = mix(c, dryG, dryW);
+	c *= 0.82 + 0.36 * mix(0.5, n2, 0.8);
 
-	// farmland patchwork on flat lowlands
 	float fieldMask = smoothstep(0.52, 0.62, m.g) * smoothstep(420.0, 180.0, h) * smoothstep(0.1, 0.04, slope) * smoothstep(3.0, 8.0, h);
+	float plowed = 0.0;
 	if (fieldMask > 0.0) {
 		float ang = 0.35 + floor(m.b * 3.0) * 0.5;
 		mat2 R = mat2(cos(ang), -sin(ang), sin(ang), cos(ang));
@@ -275,78 +279,140 @@ void terrainShade(inout vec3 col) {
 		vec2 fr = fract(qq / cs);
 		float hs = th12(id);
 		vec3 fc = hs < 0.22 ? vec3(0.30, 0.23, 0.09) : (hs < 0.5 ? vec3(0.07, 0.13, 0.03) : (hs < 0.68 ? vec3(0.11, 0.075, 0.045) : (hs < 0.85 ? vec3(0.15, 0.16, 0.06) : vec3(0.21, 0.19, 0.08))));
-		fc *= 0.92 + 0.12 * sin((hs > 0.5 ? qq.x : qq.y) * 1.3) * nearF;
+		float rows = 0.5 + 0.5 * sin((hs > 0.5 ? qq.x : qq.y) * 2.4);
+		fc *= 0.9 + 0.2 * rows * (1.0 - smoothstep(200.0, 1200.0, dist));
 		vec2 e = min(fr, 1.0 - fr) * cs;
 		float hedge = smoothstep(5.0, 1.5, min(e.x, e.y));
 		fc = mix(fc, vec3(0.03, 0.055, 0.02), hedge * 0.85);
 		c = mix(c, fc, fieldMask);
+		plowed = fieldMask * (1.0 - hedge) * ((hs >= 0.5 && hs < 0.68) || hs < 0.22 ? 1.0 : 0.0);
 	}
-
-	// forest canopy (matches CPU tree placement rule)
 	float forest = smoothstep(0.52, 0.62, m.r) * smoothstep(3.0, 8.0, h) * smoothstep(2000.0, 1750.0, h) * smoothstep(0.45, 0.3, slope);
-	vec3 canopy = mix(vec3(0.03, 0.062, 0.022), vec3(0.06, 0.09, 0.032), n2) * (0.85 + 0.3 * n3 * nearF);
+	vec3 canopy = mix(vec3(0.03, 0.062, 0.022), vec3(0.06, 0.09, 0.032), n2);
 	c = mix(c, canopy, forest * 0.85);
-
-	// rock with strata
 	float strata = vnoise(vec2(h * 0.12 + n1 * 3.0, wp.x * 0.0007));
 	vec3 rock = mix(vec3(0.10, 0.092, 0.082), vec3(0.21, 0.19, 0.165), n2 * 0.6 + strata * 0.4);
-	rock *= 0.85 + 0.3 * n3 * nearF;
-	float rockW = smoothstep(0.30, 0.48, slope + (n1 - 0.5) * 0.18) + smoothstep(2200.0, 2900.0, h + n1 * 350.0) * 0.65;
-	c = mix(c, rock, clamp(rockW, 0.0, 1.0));
-
-	// snow
+	float rockW = clamp(smoothstep(0.30, 0.48, slope + (n1 - 0.5) * 0.18) + smoothstep(2200.0, 2900.0, h + n1 * 350.0) * 0.65, 0.0, 1.0);
+	c = mix(c, rock, rockW);
 	float snowLine = 2550.0 + (n1 - 0.5) * 600.0;
 	float snow = smoothstep(snowLine, snowLine + 220.0, h) * smoothstep(0.62, 0.4, slope + (n2 - 0.5) * 0.15);
-	c = mix(c, vec3(0.78, 0.81, 0.86) * (0.92 + 0.08 * n3), snow);
-
-	// beaches / riverbanks
+	c = mix(c, vec3(0.78, 0.81, 0.86), snow);
 	float beach = smoothstep(4.5, 1.2, h + (n2 - 0.5) * 3.0) * (1.0 - snow);
-	c = mix(c, vec3(0.40, 0.35, 0.25) * (0.9 + 0.2 * n3), beach);
-
+	c = mix(c, vec3(0.40, 0.35, 0.25), beach);
 	tRough = mix(0.95, 0.75, snow);
+
+	// ---------------- close-range PBR detail from the generated texture arrays
+	vec3 Noff = vec3(0.0);
+	vec4 aspT = vec4(0.04, 0.04, 0.042, 0.5), conT = vec4(0.3, 0.29, 0.27, 0.5);
+	vec4 aspN = vec4(0.5, 0.5, 0.85, 1.0);
+	if (nearT > 0.0) {
+		const float S0 = 1.0 / 6.0, S1 = 1.0 / 31.0;
+		const mat2 R1 = mat2(0.799, -0.602, 0.602, 0.799);
+		vec2 uv0 = wp.xz * S0, uv1 = R1 * wp.xz * S1;
+		vec2 dx0 = gX * S0, dy0 = gY * S0, dx1 = R1 * gX * S1, dy1 = R1 * gY * S1;
+		vec4 A = mix(sA(vec3(uv0, 0.0), dx0, dy0), sA(vec3(uv1, 0.0), dx1, dy1), 0.4);
+		vec4 N = mix(sN(vec3(uv0, 0.0), dx0, dy0), sN(vec3(uv1, 0.0), dx1, dy1), 0.4);
+		vec3 M = layerMean(0.0);
+		vec3 off = topOff(N);
+		float rgh = N.b, ao = N.a, f;
+		#define LAYER_TOP(L, W, SC) { vec2 u_ = wp.xz * SC; vec4 a_ = sA(vec3(u_, L), gX * SC, gY * SC); f = hblend(W, A.a, a_.a); if (f > 0.0) { vec4 n_ = sN(vec3(u_, L), gX * SC, gY * SC); A = mix(A, a_, f); M = mix(M, layerMean(L), f); off = mix(off, topOff(n_), f); rgh = mix(rgh, n_.b, f); ao = mix(ao, n_.a, f); } }
+		float dryD = max(dryW, plowed * 0.9);
+		if (dryD > 0.01) LAYER_TOP(1.0, dryD, (1.0 / 4.0))
+		if (forest > 0.01) LAYER_TOP(5.0, forest * 0.9, (1.0 / 5.0))
+		if (beach > 0.01) LAYER_TOP(3.0, beach, (1.0 / 5.0))
+		if (rockW > 0.01) {
+			vec3 bw = pow(abs(n), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
+			const float SR = 1.0 / 13.0;
+			vec4 ax = sA(vec3(wp.zy * SR, 2.0), g3x.zy * SR, g3y.zy * SR);
+			vec4 ay = sA(vec3(wp.xz * SR, 2.0), g3x.xz * SR, g3y.xz * SR);
+			vec4 az = sA(vec3(wp.xy * SR, 2.0), g3x.xy * SR, g3y.xy * SR);
+			vec4 ra = ax * bw.x + ay * bw.y + az * bw.z;
+			f = hblend(rockW, A.a, ra.a);
+			if (f > 0.0) {
+				vec4 nx = sN(vec3(wp.zy * SR, 2.0), g3x.zy * SR, g3y.zy * SR);
+				vec4 ny = sN(vec3(wp.xz * SR, 2.0), g3x.xz * SR, g3y.xz * SR);
+				vec4 nz = sN(vec3(wp.xy * SR, 2.0), g3x.xy * SR, g3y.xy * SR);
+				vec2 tx = nx.xy * 2.0 - 1.0, ty = ny.xy * 2.0 - 1.0, tz = nz.xy * 2.0 - 1.0;
+				vec3 roff = vec3(0.0, tx.y, tx.x) * bw.x + vec3(ty.x, 0.0, ty.y) * bw.y + vec3(tz.x, tz.y, 0.0) * bw.z;
+				vec4 rn = nx * bw.x + ny * bw.y + nz * bw.z;
+				A = mix(A, ra, f); M = mix(M, layerMean(2.0), f); off = mix(off, roff * 1.4, f); rgh = mix(rgh, rn.b, f); ao = mix(ao, rn.a, f);
+			}
+		}
+		if (snow > 0.01) LAYER_TOP(4.0, snow, (1.0 / 9.0))
+		c = mix(c, c * clamp(A.rgb / M, 0.0, 3.0), nearT);
+		Noff = off * nearT;
+		tRough = mix(tRough, rgh, nearT * 0.85);
+		tDetAO = mix(1.0, ao, nearT);
+	}
+
+	// ---------------- airports
+	float pav = 0.0;
 	float aa = max(fwidth(wp.x), fwidth(wp.z)) + 0.02;
-	airportSurface(wp, c, tRough, aa);
+	float texF = 1.0 - smoothstep(1500.0, 4000.0, dist);
+	bool nearRwy = false;
+	for (int i = 0; i < 3; i++) {
+		if (i >= uRwyCount) break;
+		if (length(wp.xz - uRwyA[i].xy) < uRwyA[i].w * 0.5 + 1200.0) nearRwy = true;
+	}
+	if (nearRwy) {
+		if (texF > 0.0) {
+			const float SA = 1.0 / 3.0, SC = 1.0 / 5.0;
+			aspT = sA(vec3(wp.xz * SA, 6.0), gX * SA, gY * SA);
+			aspN = sN(vec3(wp.xz * SA, 6.0), gX * SA, gY * SA);
+			conT = sA(vec3(wp.xz * SC, 7.0), gX * SC, gY * SC);
+		}
+		airportSurface(wp, c, tRough, aa, aspT, conT, texF, pav);
+		if (pav > 0.0) {
+			Noff = mix(Noff, topOff(aspN) * 0.6 * texF, pav);
+			tRough = mix(tRough, aspN.b, pav * texF * 0.6);
+			tDetAO = mix(tDetAO, mix(1.0, aspN.a, texF), pav);
+		}
+	}
+	tN = normalize(n + Noff);
 
-	// detail normal perturbation
-	vec2 dn = vec2(vnoise(wp.xz * 0.35) - 0.5, vnoise(wp.xz * 0.35 + 17.0) - 0.5) * 0.25 * nearF * (1.0 - snow * 0.5);
-	tN = normalize(n + vec3(dn.x, 0.0, dn.y) * (0.4 + rockW));
-
-	// ocean / lakes
+	// ---------------- ocean / lakes
 	float water = smoothstep(0.02, 0.6, vWater);
 	if (water > 0.0) {
 		float depth = vWater;
 		vec2 g = waveSlope(wp.xz, dist, uTime);
-		vec3 wn = normalize(vec3(-g.x, 1.0, -g.y));
+		const float SW0 = 1.0 / 9.0, SW1 = 1.0 / 23.0;
+		vec2 u0 = wp.xz * SW0 + vec2(uTime * 0.021, uTime * 0.013), u1 = wp.xz * SW1 - vec2(uTime * 0.008, -uTime * 0.017);
+		vec4 r0 = sN(vec3(u0, 8.0), gX * SW0, gY * SW0), r1 = sN(vec3(u1, 8.0), gX * SW1, gY * SW1);
+		vec2 rip = (r0.xy + r1.xy - 1.0) * (1.0 - smoothstep(300.0, 4000.0, dist)) * 0.35;
+		vec3 wn = normalize(vec3(-g.x + rip.x, 1.0, -g.y + rip.y));
 		vec3 deep = vec3(0.004, 0.018, 0.03);
 		vec3 shallow = vec3(0.02, 0.09, 0.085);
 		vec3 wc = mix(shallow, deep, smoothstep(0.5, 25.0, depth));
+		// light scattering in wave crests facing the viewer
+		vec3 V = normalize(cameraPosition - wp);
+		wc += vec3(0.01, 0.05, 0.045) * pow(clamp(1.0 - dot(wn, V), 0.0, 1.0), 3.0) * smoothstep(-0.2, 0.3, uLightDir.y);
 		wc = mix(vec3(0.3, 0.27, 0.19), wc, smoothstep(0.0, 1.8, depth));
 		float foamN = vnoise(wp.xz * 0.25 + vec2(uTime * 0.3, 0.0)) * vnoise(wp.xz * 0.07 - uTime * 0.05);
-		float foam = smoothstep(1.6, 0.2, depth + sin(uTime * 0.8 + wp.x * 0.05) * 0.4) * smoothstep(0.12, 0.3, foamN) * (1.0 - smoothstep(800.0, 3000.0, dist));
+		float foam = smoothstep(1.6, 0.2, depth + sin(uTime * 0.8 + wp.x * 0.05) * 0.4) * smoothstep(0.12, 0.3, foamN + (r0.x - 0.5) * 0.15) * (1.0 - smoothstep(800.0, 3000.0, dist));
 		wc = mix(wc, vec3(0.7), foam);
 		c = mix(c, wc, water);
 		tN = normalize(mix(tN, wn, water));
-		tRough = mix(tRough, mix(0.035 + 0.1 * smoothstep(400.0, 9000.0, dist), 0.8, foam), water);
+		tRough = mix(tRough, mix(0.03 + 0.1 * smoothstep(400.0, 9000.0, dist), 0.8, foam), water);
 		tWaterMask = water * (1.0 - foam);
+		tDetAO = mix(tDetAO, 1.0, water);
 	}
-	tCloudShadow = cloudShadowAt(wp);
+	tCloudShadow = wlCloudShadow(wp);
 	col = c;
 }
 `;
 
-function createTerrainMaterial(macroTex, cloudTex) {
+function createTerrainMaterial(macroTex, cloudTex, layers) {
 	const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
+	worldUniforms.tWeather.value = cloudTex.weather;
 	const uniforms = {
 		tMacro: { value: macroTex },
 		tDigits: { value: createDigitAtlas() },
-		tWeather: { value: cloudTex.weather },
+		tLayA: { value: layers.A },
+		tLayN: { value: layers.N },
 		uTime: { value: 0 },
 		uRwyA: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
 		uRwyB: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
 		uRwyCount: { value: 0 },
-		uLightDir: { value: new THREE.Vector3(0, 1, 0) },
-		uCoverage: { value: 0.4 }, uCloudMid: { value: 2000 }, uCloudsOn: { value: 1 },
-		uWind: { value: new THREE.Vector2() },
 	};
 	airports.slice(0, 3).forEach((ap, i) => {
 		uniforms.uRwyA.value[i].set(ap.x, ap.z, ap.hdRad, ap.length);
@@ -355,18 +421,18 @@ function createTerrainMaterial(macroTex, cloudTex) {
 	uniforms.uRwyCount.value = Math.min(3, airports.length);
 	mat.userData.uniforms = uniforms;
 	mat.onBeforeCompile = (shader) => {
-		Object.assign(shader.uniforms, uniforms);
+		Object.assign(shader.uniforms, uniforms, worldUniforms);
 		shader.vertexShader = shader.vertexShader
 			.replace('#include <common>', '#include <common>\nattribute float aWater;\nvarying vec3 vWPos;\nvarying vec3 vWNormal;\nvarying float vWater;')
 			.replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNormal = normalize(mat3(modelMatrix) * objectNormal);\nvWater = aWater;');
 		shader.fragmentShader = shader.fragmentShader
-			.replace('#include <common>', '#include <common>\n' + TERRAIN_PARS)
+			.replace('#include <common>', '#include <common>\n' + WORLD_LIGHT_GLSL + TERRAIN_PARS)
 			.replace('#include <color_fragment>', '#include <color_fragment>\nterrainShade(diffuseColor.rgb);')
 			.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = tRough;')
 			.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize((viewMatrix * vec4(tN, 0.0)).xyz);')
-			.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.directDiffuse *= tCloudShadow;\nreflectedLight.directSpecular *= tCloudShadow;\nreflectedLight.indirectSpecular *= mix(1.0, 0.55 + 0.45 * tCloudShadow, tWaterMask);');
+			.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n{ vec2 wlt = wlTerrain(vWPos); float sh = tCloudShadow * wlt.x;\nreflectedLight.directDiffuse *= sh;\nreflectedLight.directSpecular *= sh;\nreflectedLight.indirectDiffuse *= wlt.y * tDetAO;\nreflectedLight.indirectSpecular *= mix(1.0, 0.5 + 0.5 * sh, tWaterMask) * mix(0.55, 1.0, wlt.y * tDetAO); }');
 	};
-	mat.customProgramCacheKey = () => 'terrain-v1';
+	mat.customProgramCacheKey = () => 'terrain-v2';
 	return mat;
 }
 
@@ -445,22 +511,34 @@ function buildTile(x0, z0, size, N) {
 }
 
 // ------------------------------------------------------------------ trees
+const TREE_CELL = 512;
+
+// Low-poly but organic tree meshes with baked vertex AO.
 function createTreeGeometries() {
 	const merge = (parts) => {
 		parts = parts.map((p) => ({ ...p, geo: p.geo.index ? p.geo.toNonIndexed() : p.geo }));
 		let count = 0; parts.forEach((p) => { count += p.geo.attributes.position.count; });
 		const pos = new Float32Array(count * 3), nor = new Float32Array(count * 3), col = new Float32Array(count * 3);
-		const idx = []; let off = 0;
+		let off = 0;
 		for (const p of parts) {
 			const g = p.geo;
 			g.computeVertexNormals();
 			const pa = g.attributes.position, na = g.attributes.normal;
 			for (let i = 0; i < pa.count; i++) {
-				pos.set([pa.getX(i), pa.getY(i), pa.getZ(i)], (off + i) * 3);
-				nor.set([na.getX(i), na.getY(i), na.getZ(i)], (off + i) * 3);
-				const ao = p.ao ? 0.55 + 0.45 * Math.min(1, Math.max(0, (pa.getY(i) - p.ao[0]) / (p.ao[1] - p.ao[0]))) : 1;
-				col.set([p.c[0] * ao, p.c[1] * ao, p.c[2] * ao], (off + i) * 3);
-				idx.push(off + i);
+				const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i);
+				pos.set([x, y, z], (off + i) * 3);
+				// foliage normals bend outward from the crown centre -> soft, rounded canopy shading
+				let nx = na.getX(i), ny = na.getY(i), nz = na.getZ(i);
+				if (p.crown) {
+					const cx = x, cy = y - p.crown, cz = z;
+					const l = Math.hypot(cx, cy, cz) || 1;
+					nx = nx * 0.4 + cx / l * 0.6; ny = ny * 0.4 + cy / l * 0.6; nz = nz * 0.4 + cz / l * 0.6;
+					const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+				}
+				nor.set([nx, ny, nz], (off + i) * 3);
+				const ao = p.ao ? 0.45 + 0.55 * Math.min(1, Math.max(0, (y - p.ao[0]) / (p.ao[1] - p.ao[0]))) : 1;
+				const v = p.vary ? 0.85 + 0.3 * Math.abs(Math.sin(x * 3.1 + y * 1.7 + z * 2.3)) : 1;
+				col.set([p.c[0] * ao * v, p.c[1] * ao * v, p.c[2] * ao * v], (off + i) * 3);
 			}
 			off += pa.count;
 		}
@@ -469,63 +547,174 @@ function createTreeGeometries() {
 		g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
 		g.setAttribute('color', new THREE.BufferAttribute(col, 3));
 		g.computeBoundingSphere();
+		g.computeBoundingBox();
 		return g;
 	};
-	const trunk = new THREE.CylinderGeometry(0.18, 0.3, 3, 5).translate(0, 1.5, 0);
-	const coniferParts = [{ geo: trunk, c: [0.12, 0.08, 0.05] }];
-	for (let t = 0; t < 3; t++) {
-		const r = 2.6 - t * 0.65, hh = 5.2 - t * 0.9, y = 2.2 + t * 2.6;
-		const cone = new THREE.ConeGeometry(r, hh, 7, 1).translate(0, y + hh / 2, 0);
-		coniferParts.push({ geo: cone, c: [0.075, 0.13, 0.065], ao: [1.5, 12.5] });
+	const jag = (geo, amt, seed) => {
+		const p = geo.attributes.position;
+		for (let i = 0; i < p.count; i++) {
+			const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+			const a = Math.atan2(z, x);
+			const r = Math.hypot(x, z);
+			const k = 1 + amt * (Math.sin(a * 7 + seed) * 0.6 + Math.sin(a * 13 + y * 2 + seed * 2) * 0.4);
+			p.setXYZ(i, Math.cos(a) * r * k, y, Math.sin(a) * r * k);
+		}
+		return geo;
+	};
+	const trunk = new THREE.CylinderGeometry(0.16, 0.32, 3.2, 6).translate(0, 1.6, 0);
+	const coniferParts = [{ geo: trunk, c: [0.13, 0.085, 0.05] }];
+	for (let t = 0; t < 4; t++) {
+		const r = 2.7 - t * 0.55, hh = 4.4 - t * 0.6, y = 2.0 + t * 2.3;
+		const cone = jag(new THREE.ConeGeometry(r, hh, 11, 2), 0.16, t * 1.7).translate(0, y + hh / 2, 0);
+		coniferParts.push({ geo: cone, c: [0.07, 0.125, 0.06], ao: [1.2, 13.0], vary: true, crown: 7 });
 	}
 	const conifer = merge(coniferParts);
-	const crown = new THREE.IcosahedronGeometry(3.0, 1);
-	const p = crown.attributes.position;
-	for (let i = 0; i < p.count; i++) {
-		const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-		const f = 1 + 0.18 * Math.sin(x * 2.1 + z * 1.3) * Math.cos(y * 1.7);
-		p.setXYZ(i, x * f, y * f * 0.85 + 6.0, z * f);
+	const blobs = [];
+	const blobDefs = [[0, 6.2, 0, 2.6], [1.3, 5.2, 0.6, 1.9], [-1.2, 5.4, -0.5, 2.0], [0.3, 5.0, -1.4, 1.8], [-0.4, 7.4, 0.4, 1.8], [0.9, 6.8, -0.8, 1.6]];
+	for (const [x, y, z, r] of blobDefs) {
+		const g = new THREE.IcosahedronGeometry(r, 1);
+		const p = g.attributes.position;
+		for (let i = 0; i < p.count; i++) {
+			const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
+			const f = 1 + 0.14 * Math.sin(px * 2.3 + pz * 1.9) * Math.cos(py * 2.1);
+			p.setXYZ(i, px * f + x, py * f * 0.85 + y, pz * f + z);
+		}
+		blobs.push({ geo: g, c: [0.09, 0.15, 0.045], ao: [3.2, 8.8], vary: true, crown: 6.2 });
 	}
 	const broad = merge([
-		{ geo: new THREE.CylinderGeometry(0.2, 0.35, 4, 5).translate(0, 2, 0), c: [0.13, 0.09, 0.06] },
-		{ geo: crown, c: [0.1, 0.16, 0.05], ao: [3.5, 8.5] },
+		{ geo: new THREE.CylinderGeometry(0.18, 0.34, 4.6, 6).translate(0, 2.3, 0), c: [0.14, 0.1, 0.065] },
+		...blobs,
 	]);
 	return { conifer, broad };
 }
 
+// Render each tree mesh into an atlas (side + top views) and build crossed-quad impostors.
+function createImpostors(renderer, geos) {
+	const T = 256;
+	const rt = new THREE.WebGLRenderTarget(T * 2, T * 2, { depthBuffer: true });
+	rt.texture.generateMipmaps = true;
+	rt.texture.minFilter = THREE.LinearMipmapLinearFilter;
+	rt.texture.colorSpace = THREE.NoColorSpace;
+	const scene = new THREE.Scene();
+	const mat = new THREE.MeshBasicMaterial({ vertexColors: true });
+	const prevClear = renderer.getClearColor(new THREE.Color()), prevAlpha = renderer.getClearAlpha();
+	const prevRT = renderer.getRenderTarget();
+	renderer.setRenderTarget(rt);
+	renderer.setClearColor(new THREE.Color(0.05, 0.09, 0.035), 0);
+	renderer.clear();
+	const out = {};
+	['conifer', 'broad'].forEach((type, ti) => {
+		const geo = geos[type];
+		const bb = geo.boundingBox;
+		const w = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 1.04;
+		const hgt = (bb.max.y - bb.min.y) * 1.02;
+		const mesh = new THREE.Mesh(geo, mat);
+		scene.add(mesh);
+		// side view (column ti, row 0)
+		const sz = Math.max(w, hgt);
+		const side = new THREE.OrthographicCamera(-sz / 2, sz / 2, sz, 0, 0.1, 100);
+		side.position.set(0, bb.min.y, 50); side.lookAt(0, bb.min.y, 0);
+		rt.viewport.set(ti * T, 0, T, T); rt.scissor.set(ti * T, 0, T, T); rt.scissorTest = true;
+		renderer.setRenderTarget(rt);
+		renderer.render(scene, side);
+		// top view (column ti, row 1)
+		const top = new THREE.OrthographicCamera(-w / 2, w / 2, w / 2, -w / 2, 0.1, 200);
+		top.position.set(0, 100, 0); top.up.set(0, 0, -1); top.lookAt(0, 0, 0);
+		rt.viewport.set(ti * T, T, T, T); rt.scissor.set(ti * T, T, T, T);
+		renderer.setRenderTarget(rt);
+		renderer.render(scene, top);
+		scene.remove(mesh);
+		// impostor geometry: two vertical crossed quads + one horizontal quad
+		const u0 = ti * 0.5, u1 = u0 + 0.5;
+		const hw = sz / 2, base = bb.min.y;
+		const P = [], N = [], UV = [], I = [];
+		const quad = (pts, nrm, uvs) => {
+			const o = P.length / 3;
+			pts.forEach((p, k) => { P.push(...p); N.push(...nrm[k]); UV.push(...uvs[k]); });
+			I.push(o, o + 1, o + 2, o, o + 2, o + 3);
+		};
+		const sideUV = [[u0, 0], [u1, 0], [u1, 0.5], [u0, 0.5]];
+		const rn = (x, y, z) => { const l = Math.hypot(x, y, z); return [x / l, y / l, z / l]; };
+		quad([[-hw, base, 0], [hw, base, 0], [hw, base + sz, 0], [-hw, base + sz, 0]], [rn(-1, 0.3, 0.2), rn(1, 0.3, 0.2), rn(1, 1, 0.2), rn(-1, 1, 0.2)], sideUV);
+		quad([[0, base, hw], [0, base, -hw], [0, base + sz, -hw], [0, base + sz, hw]], [rn(0.2, 0.3, 1), rn(0.2, 0.3, -1), rn(0.2, 1, -1), rn(0.2, 1, 1)], sideUV);
+		const ty = base + hgt * 0.62, tw = w / 2;
+		quad([[-tw, ty, tw], [tw, ty, tw], [tw, ty, -tw], [-tw, ty, -tw]], [rn(-0.4, 1, 0.4), rn(0.4, 1, 0.4), rn(0.4, 1, -0.4), rn(-0.4, 1, -0.4)],
+			[[u0, 0.5], [u1, 0.5], [u1, 1], [u0, 1]]);
+		const g = new THREE.BufferGeometry();
+		g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+		g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+		g.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
+		g.setIndex(I);
+		g.computeBoundingSphere();
+		out[type] = g;
+	});
+	rt.scissorTest = false;
+	rt.viewport.set(0, 0, T * 2, T * 2);
+	renderer.setRenderTarget(prevRT);
+	renderer.setClearColor(prevClear, prevAlpha);
+	mat.dispose();
+	return { geos: out, texture: rt.texture };
+}
+
+// subtle procedural leaf clumping for the near trees
+function patchFoliage(mat) {
+	const prev = mat.onBeforeCompile;
+	mat.onBeforeCompile = (shader, r) => {
+		if (prev) prev(shader, r);
+		shader.vertexShader = shader.vertexShader
+			.replace('#include <common>', '#include <common>\nvarying vec3 vLeafP;')
+			.replace('#include <begin_vertex>', '#include <begin_vertex>\nvLeafP = position * 1.7;');
+		shader.fragmentShader = shader.fragmentShader
+			.replace('#include <common>', `#include <common>
+varying vec3 vLeafP;
+float lh(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float ln3(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(mix(lh(i), lh(i + vec3(1,0,0)), f.x), mix(lh(i + vec3(0,1,0)), lh(i + vec3(1,1,0)), f.x), f.y),
+	           mix(mix(lh(i + vec3(0,0,1)), lh(i + vec3(1,0,1)), f.x), mix(lh(i + vec3(0,1,1)), lh(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+			.replace('#include <color_fragment>', `#include <color_fragment>
+	float leafN = ln3(vLeafP * 1.6) * 0.6 + ln3(vLeafP * 4.1) * 0.4;
+	diffuseColor.rgb *= 0.7 + 0.6 * leafN;`)
+			.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+	vec3 lp = vLeafP * 2.3;
+	vec3 lg = vec3(ln3(lp + vec3(0.3, 0.0, 0.0)) - ln3(lp - vec3(0.3, 0.0, 0.0)), ln3(lp + vec3(0.0, 0.3, 0.0)) - ln3(lp - vec3(0.0, 0.3, 0.0)), ln3(lp + vec3(0.0, 0.0, 0.3)) - ln3(lp - vec3(0.0, 0.0, 0.3)));
+	normal = normalize(normal + (viewMatrix * vec4(lg, 0.0)).xyz * 0.9);`);
+	};
+	const pk = mat.customProgramCacheKey ? mat.customProgramCacheKey.bind(mat) : () => '';
+	mat.customProgramCacheKey = () => pk() + '|leaf';
+	return mat;
+}
+
 export class Terrain {
-	constructor(scene, cloudTex, quality) {
+	constructor(scene, cloudTex, quality, renderer) {
 		this.scene = scene;
 		this.group = new THREE.Group();
 		scene.add(this.group);
 		const macro = createMacroTexture();
 		this.macroForest = macro.forest;
-		this.material = createTerrainMaterial(macro.tex, cloudTex);
+		this.layers = generateLayerTextures(renderer, quality.texSize || 512);
+		this.material = createTerrainMaterial(macro.tex, cloudTex, this.layers);
 		this.uniforms = this.material.userData.uniforms;
 		this.tiles = new Map();
 		this.requests = new Map();
 		this.frame = 0;
 		this.ROOT = 16384;
-		this.setQuality(quality);
 
-		// trees
-		const tg = createTreeGeometries();
-		const treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
-		this.treeMeshes = {};
-		this.treeCap = 90000;
-		for (const type of ['conifer', 'broad']) {
-			const m = new THREE.InstancedMesh(tg[type], treeMat, this.treeCap);
-			m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.treeCap * 3), 3);
-			m.count = 0;
-			m.frustumCulled = false;
-			m.castShadow = true;
-			m.receiveShadow = true;
-			this.treeMeshes[type] = m;
-			scene.add(m);
-		}
+		// forests
+		this.treeGeos = createTreeGeometries();
+		this.impostors = createImpostors(renderer, this.treeGeos);
+		this.treeMat = patchFoliage(patchWorldLighting(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0 }), { key: 'tree' }));
+		this.impMat = patchWorldLighting(new THREE.MeshStandardMaterial({
+			map: this.impostors.texture, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.9, metalness: 0,
+		}), { key: 'imp' });
+		this.impMat.onBeforeCompile = ((prev) => (shader, r) => {
+			prev(shader, r);
+			// impostor atlas is stored linearly; boost to match the lit meshes
+			shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.rgb *= 1.25;');
+		})(this.impMat.onBeforeCompile);
+		this.treeGroup = new THREE.Group();
+		scene.add(this.treeGroup);
 		this.treeCells = new Map();
-		this.treeDirty = false;
-		this.treeCellSize = 256;
+		this.setQuality(quality);
 	}
 
 	setQuality(q) {
@@ -533,12 +722,15 @@ export class Terrain {
 		this.splitK = q.terrainSplit;
 		this.maxLevel = q.terrainMaxLevel;
 		this.treeRadius = q.treeRadius;
+		this.treeNear = q.treeNear || 1000;
 		this.treeDensity = q.treeDensity;
 		this.treeShadows = q.treeShadows;
-		if (this.treeMeshes) for (const k in this.treeMeshes) this.treeMeshes[k].castShadow = q.treeShadows;
+		this.impMat.alphaToCoverage = q.msaa > 0;
+		this.impMat.needsUpdate = true;
 		for (const t of this.tiles.values()) { this.group.remove(t.mesh); t.mesh.geometry.dispose(); }
 		this.tiles.clear();
-		if (this.treeCells) { this.treeCells.clear(); this.treeDirty = true; }
+		for (const c of this.treeCells.values()) this._disposeCell(c);
+		this.treeCells.clear();
 	}
 
 	_dist(level, ix, iz, cam, agl) {
@@ -621,8 +813,8 @@ export class Terrain {
 
 	// ------------------------------------------------------------ forests
 	_buildTreeCell(ci, cj) {
-		const S = this.treeCellSize;
-		const cand = Math.round(260 * this.treeDensity);
+		const S = TREE_CELL;
+		const cand = Math.round(1040 * this.treeDensity);
 		const out = { conifer: [], broad: [] };
 		const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
 		const up = new THREE.Vector3(0, 1, 0);
@@ -632,9 +824,8 @@ export class Terrain {
 			const r3 = hash2(ci + k * 101, cj - k * 211);
 			const x = (ci + r1) * S, z = (cj + r2) * S;
 			const f = sampleMacro(this.macroForest, x, z);
-			let dens = smoothstep(0.52, 0.62, f);
-			if (dens < 0.05 && r3 > 0.04) continue;
-			if (r3 > Math.max(dens, 0.04)) continue;
+			const dens = smoothstep(0.52, 0.62, f);
+			if (r3 > Math.max(dens, 0.035)) continue;
 			const h = getHeight(x, z);
 			if (h < 3 || h > 2000) continue;
 			const hx = getHeight(x + 3, z) - getHeight(x - 3, z), hz = getHeight(x, z + 3) - getHeight(x, z - 3);
@@ -652,29 +843,50 @@ export class Terrain {
 			s.set(sc, sc * (0.85 + r2 * 0.4), sc);
 			p.set(x, h - 0.6, z);
 			m4.compose(p, q, s);
-			const tint = 0.75 + r3 * 8 * 0.06 + hash2(ci + k, cj) * 0.35;
+			const tint = 0.78 + hash2(ci + k, cj) * 0.4;
 			const hue = hash2(k, k + ci);
-			out[type].push({ m: m4.toArray(), c: [tint * (0.9 + hue * 0.25), tint, tint * (0.85 + hue * 0.1)] });
+			out[type].push({ m: m4.toArray(), c: [tint * (0.88 + hue * 0.3), tint, tint * (0.85 + hue * 0.12)] });
 		}
-		const pack = (arr) => {
+		const cell = { cx: (ci + 0.5) * S, cz: (cj + 0.5) * S, types: {} };
+		for (const type of ['conifer', 'broad']) {
+			const arr = out[type];
+			if (!arr.length) continue;
 			const mats = new Float32Array(arr.length * 16), cols = new Float32Array(arr.length * 3);
 			arr.forEach((t, i) => { mats.set(t.m, i * 16); cols.set(t.c, i * 3); });
-			return { mats, cols, n: arr.length };
-		};
-		return { conifer: pack(out.conifer), broad: pack(out.broad) };
+			const mAttr = new THREE.InstancedBufferAttribute(mats, 16);
+			const cAttr = new THREE.InstancedBufferAttribute(cols, 3);
+			const mk = (geo, mat, shadow) => {
+				const im = new THREE.InstancedMesh(geo, mat, arr.length);
+				im.instanceMatrix = mAttr;
+				im.instanceColor = cAttr;
+				im.computeBoundingSphere();
+				im.castShadow = shadow; im.receiveShadow = true;
+				im.matrixAutoUpdate = false;
+				im.visible = false;
+				this.treeGroup.add(im);
+				return im;
+			};
+			cell.types[type] = {
+				near: mk(this.treeGeos[type], this.treeMat, this.treeShadows),
+				far: mk(this.impostors.geos[type], this.impMat, false),
+			};
+		}
+		return cell;
+	}
+
+	_disposeCell(cell) {
+		for (const t of Object.values(cell.types)) {
+			for (const m of [t.near, t.far]) { this.treeGroup.remove(m); m.dispose(); }
+		}
 	}
 
 	updateTrees(cam, agl, force) {
-		const S = this.treeCellSize, R = this.treeRadius;
-		if (R <= 0) {
-			for (const k in this.treeMeshes) this.treeMeshes[k].count = 0;
-			return;
-		}
-		const ci0 = Math.floor((cam.x - R) / S), ci1 = Math.floor((cam.x + R) / S);
-		const cj0 = Math.floor((cam.z - R) / S), cj1 = Math.floor((cam.z + R) / S);
+		const S = TREE_CELL, R = this.treeRadius;
 		const needed = new Set();
 		const missing = [];
-		if (agl < 4500) {
+		if (R > 0 && agl < 4500) {
+			const ci0 = Math.floor((cam.x - R) / S), ci1 = Math.floor((cam.x + R) / S);
+			const cj0 = Math.floor((cam.z - R) / S), cj1 = Math.floor((cam.z + R) / S);
 			for (let j = cj0; j <= cj1; j++) for (let i = ci0; i <= ci1; i++) {
 				const dx = Math.max(i * S - cam.x, 0, cam.x - (i + 1) * S), dz = Math.max(j * S - cam.z, 0, cam.z - (j + 1) * S);
 				const d = Math.hypot(dx, dz);
@@ -685,36 +897,22 @@ export class Terrain {
 			}
 		}
 		missing.sort((a, b) => a.d - b.d);
-		const lim = force ? missing.length : 3;
-		for (let k = 0; k < Math.min(lim, missing.length); k++) {
+		const lim = force ? missing.filter((m) => m.d < 1600).length : 1;
+		for (let k = 0; k < Math.min(Math.max(lim, 1), missing.length); k++) {
 			const m = missing[k];
 			this.treeCells.set(m.key, this._buildTreeCell(m.i, m.j));
-			this.treeDirty = true;
 		}
-		for (const key of this.treeCells.keys()) {
-			if (!needed.has(key)) { this.treeCells.delete(key); this.treeDirty = true; }
-		}
-		if (!this.treeDirty) return;
-		this.treeDirty = false;
-		for (const type of ['conifer', 'broad']) {
-			const mesh = this.treeMeshes[type];
-			const ma = mesh.instanceMatrix.array, ca = mesh.instanceColor.array;
-			let n = 0;
-			for (const cell of this.treeCells.values()) {
-				const c = cell[type];
-				if (n + c.n > this.treeCap) break;
-				ma.set(c.mats, n * 16); ca.set(c.cols, n * 3);
-				n += c.n;
-			}
-			mesh.count = n;
-			mesh.instanceMatrix.needsUpdate = true;
-			mesh.instanceColor.needsUpdate = true;
+		for (const [key, cell] of this.treeCells) {
+			if (!needed.has(key)) { this._disposeCell(cell); this.treeCells.delete(key); continue; }
+			const d = Math.hypot(cell.cx - cam.x, cell.cz - cam.z, agl * 0.7);
+			const near = d < this.treeNear + S * 0.7;
+			for (const t of Object.values(cell.types)) { t.near.visible = near; t.far.visible = !near; }
 		}
 	}
 
 	setEnv(env, lightDir, time) {
-		const u = this.uniforms;
-		u.uTime.value = time;
+		this.uniforms.uTime.value = time;
+		const u = worldUniforms;
 		u.uLightDir.value.copy(lightDir);
 		u.uCoverage.value = env.coverage;
 		u.uCloudMid.value = (env.cloudBase + env.cloudTop) * 0.5;

@@ -81,7 +81,7 @@ function wingPoint(def, s, x, upper, side) {
 }
 
 function wingPanel(def, s0, s1, c0, c1, side, ns = 6, nc = 12) {
-	const pos = [], idx = [];
+	const pos = [], idx = [], uvs = [];
 	const cs = (i) => {
 		const t = i / nc;
 		const f = 0.5 - 0.5 * Math.cos(Math.PI * t);
@@ -94,6 +94,7 @@ function wingPanel(def, s0, s1, c0, c1, side, ns = 6, nc = 12) {
 			for (let i = 0; i <= nc; i++) {
 				const p = wingPoint(def, s, cs(i), upper, side);
 				pos.push(p.x, p.y, p.z);
+				uvs.push(s, cs(i));
 			}
 		}
 		for (let j = 0; j < ns; j++) for (let i = 0; i < nc; i++) {
@@ -110,7 +111,8 @@ function wingPanel(def, s0, s1, c0, c1, side, ns = 6, nc = 12) {
 		for (let i = nc; i >= 0; i--) ring.push(wingPoint(def, s, cs(i), false, side));
 		const cen = ring.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / ring.length);
 		pos.push(cen.x, cen.y, cen.z);
-		ring.forEach((p) => pos.push(p.x, p.y, p.z));
+		uvs.push(s, 0.5);
+		ring.forEach((p, k) => { pos.push(p.x, p.y, p.z); uvs.push(s, k <= nc ? cs(k) : cs(2 * nc + 1 - k)); });
 		for (let i = 0; i < ring.length - 1; i++) idx.push(base, base + 1 + i, base + 2 + i);
 	};
 	cap(s0); cap(s1);
@@ -120,6 +122,7 @@ function wingPanel(def, s0, s1, c0, c1, side, ns = 6, nc = 12) {
 			const s = s0 + (s1 - s0) * j / ns;
 			const a = wingPoint(def, s, c, true, side), b = wingPoint(def, s, c, false, side);
 			pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+			uvs.push(s, c, s, c);
 		}
 		for (let j = 0; j < ns; j++) {
 			const a = base + j * 2;
@@ -133,6 +136,7 @@ function wingPanel(def, s0, s1, c0, c1, side, ns = 6, nc = 12) {
 	}
 	const g = new THREE.BufferGeometry();
 	g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+	g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
 	g.setIndex(idx);
 	g.computeVertexNormals();
 	return g;
@@ -161,6 +165,98 @@ export function setSurface(grp, teDown) {
 	if (Math.abs(ax.y) > 0.7) a = teDown; // rudder: positive = trailing edge to the right
 	else if (ax.x < 0) a = -teDown;
 	grp.quaternion.setFromAxisAngle(ax, a);
+}
+
+function makeCanvas(W, H) { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; }
+
+// Normal map from a height (bump) canvas via a Sobel filter. Canvas rows run top-down while v runs up.
+function normalFromBump(bump, strength) {
+	const W = bump.width, H = bump.height;
+	const src = bump.getContext('2d').getImageData(0, 0, W, H).data;
+	const out = makeCanvas(W, H);
+	const og = out.getContext('2d');
+	const img = og.createImageData(W, H);
+	const h = (x, y) => src[(((y + H) % H) * W + ((x + W) % W)) * 4] / 255;
+	for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+		const dx = (h(x + 1, y - 1) + 2 * h(x + 1, y) + h(x + 1, y + 1)) - (h(x - 1, y - 1) + 2 * h(x - 1, y) + h(x - 1, y + 1));
+		const dy = (h(x - 1, y + 1) + 2 * h(x, y + 1) + h(x + 1, y + 1)) - (h(x - 1, y - 1) + 2 * h(x, y - 1) + h(x + 1, y - 1));
+		let nx = -dx * strength, ny = dy * strength, nz = 1;
+		const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
+		const o = (y * W + x) * 4;
+		img.data[o] = (nx * 0.5 + 0.5) * 255; img.data[o + 1] = (ny * 0.5 + 0.5) * 255; img.data[o + 2] = (nz * 0.5 + 0.5) * 255; img.data[o + 3] = 255;
+	}
+	og.putImageData(img, 0, 0);
+	const t = new THREE.CanvasTexture(out);
+	t.anisotropy = 8;
+	t.wrapS = t.wrapT = THREE.RepeatWrapping;
+	return t;
+}
+
+function seeded(seed) { let s = seed; return () => { s = (s * 16807) % 2147483647; return s / 2147483647; }; }
+
+// Draws recessed panel seams, rivet rows and access hatches into the albedo, bump and roughness canvases.
+function panelDetail(ctxs, W, H, layout, seed) {
+	const rnd = seeded(seed);
+	const { a, b, r } = ctxs;
+	const line = (x0, y0, x1, y1) => {
+		a.strokeStyle = 'rgba(20,22,26,0.32)'; a.lineWidth = 1.4; a.beginPath(); a.moveTo(x0, y0); a.lineTo(x1, y1); a.stroke();
+		b.strokeStyle = 'rgb(40,40,40)'; b.lineWidth = 2.2; b.beginPath(); b.moveTo(x0, y0); b.lineTo(x1, y1); b.stroke();
+		r.strokeStyle = 'rgba(200,200,200,0.5)'; r.lineWidth = 2; r.beginPath(); r.moveTo(x0, y0); r.lineTo(x1, y1); r.stroke();
+	};
+	const rivets = (x0, y0, x1, y1, off = 5, step = 7) => {
+		const len = Math.hypot(x1 - x0, y1 - y0), n = Math.floor(len / step);
+		const nx = -(y1 - y0) / len * off, ny = (x1 - x0) / len * off;
+		for (let i = 0; i <= n; i++) {
+			const t = i / Math.max(n, 1), x = x0 + (x1 - x0) * t + nx, y = y0 + (y1 - y0) * t + ny;
+			b.fillStyle = 'rgb(165,165,165)'; b.fillRect(x - 0.9, y - 0.9, 1.8, 1.8);
+			a.fillStyle = 'rgba(255,255,255,0.10)'; a.fillRect(x - 0.7, y - 0.7, 1.4, 1.4);
+		}
+	};
+	for (const x of layout.frames || []) {
+		const X = x * W;
+		let y = 0;
+		while (y < H) { const seg = 40 + rnd() * 160; if (rnd() > 0.15) { line(X, y, X, Math.min(H, y + seg)); rivets(X, y, X, Math.min(H, y + seg)); } y += seg; }
+	}
+	for (const v of layout.stringers || []) {
+		const Y = (1 - v) * H;
+		let x = 0;
+		while (x < W) { const seg = 120 + rnd() * 380; if (rnd() > 0.2) { line(x, Y, Math.min(W, x + seg), Y); rivets(x, Y, Math.min(W, x + seg), Y, 4, 9); } x += seg; }
+	}
+	for (let i = 0; i < (layout.hatches || 0); i++) {
+		const x = rnd() * W * 0.9, y = H * (0.1 + rnd() * 0.8), w = 20 + rnd() * 50, hh = 14 + rnd() * 30;
+		a.strokeStyle = 'rgba(20,22,26,0.3)'; a.lineWidth = 1.2; a.strokeRect(x, y, w, hh);
+		b.strokeStyle = 'rgb(55,55,55)'; b.lineWidth = 2; b.strokeRect(x, y, w, hh);
+		for (const [cx, cy] of [[x + 3, y + 3], [x + w - 3, y + 3], [x + 3, y + hh - 3], [x + w - 3, y + hh - 3]]) { b.fillStyle = 'rgb(175,175,175)'; b.fillRect(cx - 1.2, cy - 1.2, 2.4, 2.4); }
+	}
+}
+
+// Build albedo + normal + roughness maps. drawBase paints the livery; layout describes panels;
+// grime(a, r, W, H) adds weathering. Roughness canvas is grey = roughness * 255.
+export function skin(W, H, roughness, drawBase, layout, grime, seed = 7, bumpStrength = 2.2, bumpDraw = null) {
+	const ca = makeCanvas(W, H), cb = makeCanvas(W, H), cr = makeCanvas(W, H);
+	const a = ca.getContext('2d'), b = cb.getContext('2d'), r = cr.getContext('2d');
+	drawBase(a, W, H);
+	b.fillStyle = 'rgb(128,128,128)'; b.fillRect(0, 0, W, H);
+	if (bumpDraw) bumpDraw(b, W, H);
+	const rv = Math.round(roughness * 255);
+	r.fillStyle = `rgb(${rv},${rv},${rv})`; r.fillRect(0, 0, W, H);
+	// subtle large-scale roughness / dirt variation
+	const rnd = seeded(seed * 31 + 5);
+	for (let i = 0; i < 90; i++) {
+		const x = rnd() * W, y = rnd() * H, rad = 20 + rnd() * 120;
+		const gr = r.createRadialGradient(x, y, 0, x, y, rad);
+		const gv = rnd() > 0.5 ? 255 : 0;
+		gr.addColorStop(0, `rgba(${gv},${gv},${gv},0.07)`);
+		gr.addColorStop(1, 'rgba(128,128,128,0)');
+		r.fillStyle = gr; r.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+	}
+	panelDetail({ a, b, r }, W, H, layout, seed);
+	if (grime) grime(a, r, W, H);
+	const map = new THREE.CanvasTexture(ca); map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = 8;
+	map.wrapS = map.wrapT = THREE.RepeatWrapping;
+	const rough = new THREE.CanvasTexture(cr); rough.anisotropy = 8;
+	rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
+	return { map, normalMap: normalFromBump(cb, bumpStrength), roughnessMap: rough };
 }
 
 function liveryTexture(draw) {
@@ -233,6 +329,45 @@ const flameMaterial = () => new THREE.ShaderMaterial({
 			gl_FragColor = vec4(c * a * 2.2, 1.0);
 		}`,
 });
+
+// ---------------------------------------------------------------- skin layouts
+const range = (a, b, st) => { const o = []; for (let x = a; x <= b + 1e-6; x += st) o.push(x); return o; };
+const TRAINER_FUS = { frames: [0.08, 0.17, 0.31, 0.44, 0.52, 0.6, 0.68, 0.76, 0.84, 0.92], stringers: [0.13, 0.31, 0.5, 0.69, 0.87], hatches: 10 };
+const JET_FUS = { frames: range(0.05, 0.97, 0.045), stringers: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9], hatches: 26 };
+const WING = { frames: range(0.08, 0.95, 0.09), stringers: [0.12, 0.42, 0.74], hatches: 6 };
+const TAIL = { frames: range(0.15, 0.9, 0.17), stringers: [0.15, 0.6], hatches: 0 };
+
+function soot(a, r, x0, x1, y0, y1, alpha) {
+	const g = a.createLinearGradient(x0, 0, x1, 0);
+	g.addColorStop(0, `rgba(25,22,20,${alpha})`); g.addColorStop(1, 'rgba(25,22,20,0)');
+	a.fillStyle = g; a.fillRect(x0, y0, x1 - x0, y1 - y0);
+	const gr = r.createLinearGradient(x0, 0, x1, 0);
+	gr.addColorStop(0, 'rgba(230,230,230,0.6)'); gr.addColorStop(1, 'rgba(230,230,230,0)');
+	r.fillStyle = gr; r.fillRect(x0, y0, x1 - x0, y1 - y0);
+}
+function trainerGrime(a, r, W, H) {
+	// exhaust soot streaks behind the cowling on the lower sides, oil film on the belly
+	soot(a, r, 0.07 * W, 0.42 * W, 0.78 * H, 0.84 * H, 0.35);
+	soot(a, r, 0.07 * W, 0.42 * W, 0.16 * H, 0.22 * H, 0.35);
+	const g = a.createLinearGradient(0, 0.9 * H, 0, H);
+	g.addColorStop(0, 'rgba(40,35,25,0)'); g.addColorStop(1, 'rgba(40,35,25,0.18)');
+	a.fillStyle = g; a.fillRect(0, 0.9 * H, W, 0.1 * H);
+}
+function jetGrime(a, r, W, H) {
+	soot(a, r, W, 0.86 * W, 0, H, 0.0);
+	const g = a.createLinearGradient(0.9 * W, 0, W, 0);
+	g.addColorStop(0, 'rgba(30,26,22,0)'); g.addColorStop(1, 'rgba(30,26,22,0.55)');
+	a.fillStyle = g; a.fillRect(0.9 * W, 0, 0.1 * W, H);
+	const gr = r.createLinearGradient(0.9 * W, 0, W, 0);
+	gr.addColorStop(0, 'rgba(240,240,240,0)'); gr.addColorStop(1, 'rgba(240,240,240,0.6)');
+	r.fillStyle = gr; r.fillRect(0.9 * W, 0, 0.1 * W, H);
+}
+function plainSkin(color, roughness, layout, seed, W = 1024, H = 512, extra) {
+	return skin(W, H, roughness, (g) => { g.fillStyle = color; g.fillRect(0, 0, W, H); if (extra) extra(g, W, H); }, layout, null, seed);
+}
+export function skinMat(sk, opts) {
+	return new THREE.MeshPhysicalMaterial({ map: sk.map, normalMap: sk.normalMap, normalScale: new THREE.Vector2(0.55, 0.55), roughnessMap: sk.roughnessMap, roughness: 1, ...opts });
+}
 
 // ---------------------------------------------------------------- aircraft builders
 export function buildAircraft(cfg) {
@@ -307,7 +442,7 @@ function buildPilot(eye, suitColor) {
 function buildTrainer(cfg) {
 	const root = new THREE.Group();
 	const M = common();
-	const livery = liveryTexture((g, W, H) => {
+	const fusSkin = skin(2048, 512, 0.3, (g, W, H) => {
 		g.fillStyle = '#f2f2ee'; g.fillRect(0, 0, W, H);
 		// red sweeping cheat-line on both sides + blue belly
 		for (const uc of [0.25, 0.75]) {
@@ -326,10 +461,18 @@ function buildTrainer(cfg) {
 		textOnSide(g, W, H, 'SK-201', 0.66, 0.22, 0.07, true, '#1b2e6b');
 		textOnSide(g, W, H, 'SK-201', 0.66, 0.78, 0.07, false, '#1b2e6b');
 		g.fillStyle = '#222'; g.fillRect(0, 0.46 * H, 0.06 * W, 0.08 * H); // cowl detail
+		// cowl louvres
+		g.fillStyle = 'rgba(30,30,30,0.6)';
+		for (let i = 0; i < 6; i++) { g.fillRect(0.03 * W + i * 9, 0.70 * H, 5, 0.05 * H); g.fillRect(0.03 * W + i * 9, 0.25 * H, 5, 0.05 * H); }
+	}, TRAINER_FUS, trainerGrime, 11);
+	const paint = skinMat(fusSkin, { metalness: 0.05, clearcoat: 1, clearcoatRoughness: 0.1 });
+	const wingSkin = plainSkin('#f0f0ea', 0.32, WING, 23, 1024, 512, (g, W, H) => {
+		// walkway & "NO STEP" stencils near the root
+		g.fillStyle = 'rgba(25,25,25,0.85)'; g.fillRect(0.02 * W, 0.45 * H, 0.1 * W, 0.22 * H);
+		g.save(); g.translate(0.2 * W, 0.6 * H); g.fillStyle = 'rgba(40,40,40,0.7)'; g.font = 'bold 22px Arial'; g.fillText('NO STEP', 0, 0); g.restore();
 	});
-	const paint = new THREE.MeshPhysicalMaterial({ map: livery, roughness: 0.32, metalness: 0.05, clearcoat: 1, clearcoatRoughness: 0.12 });
-	const wingMat = new THREE.MeshPhysicalMaterial({ color: 0xf0f0ea, roughness: 0.35, clearcoat: 0.8, clearcoatRoughness: 0.15, side: THREE.DoubleSide });
-	const redMat = new THREE.MeshPhysicalMaterial({ color: 0xb81419, roughness: 0.35, clearcoat: 0.8, side: THREE.DoubleSide });
+	const wingMat = skinMat(wingSkin, { clearcoat: 0.8, clearcoatRoughness: 0.12, side: THREE.DoubleSide });
+	const redMat = skinMat(plainSkin('#b81419', 0.32, TAIL, 31, 512, 256), { clearcoat: 0.8, clearcoatRoughness: 0.12, side: THREE.DoubleSide });
 	const S = (z, w, ht, hb, yc, n = 2.6) => [z, w, ht, hb, yc, n];
 	const fus = loft([
 		S(-3.32, 0.30, 0.30, 0.30, 0.0, 2.2),
@@ -451,7 +594,7 @@ function buildTrainer(cfg) {
 function buildJet(cfg) {
 	const root = new THREE.Group();
 	const M = common();
-	const camo = liveryTexture((g, W, H) => {
+	const fusSkin = skin(2048, 512, 0.55, (g, W, H) => {
 		g.fillStyle = '#7c8792'; g.fillRect(0, 0, W, H);
 		// splinter camo on top half
 		let seed = 7;
@@ -471,13 +614,25 @@ function buildJet(cfg) {
 		g.fillStyle = '#6e767e'; g.fillRect(0, 0, 0.05 * W, H);
 		textOnSide(g, W, H, '09-417', 0.82, 0.23, 0.05, true, '#2e3338');
 		textOnSide(g, W, H, '09-417', 0.82, 0.77, 0.05, false, '#2e3338');
-		// rescue arrow / panel lines
-		g.strokeStyle = 'rgba(40,45,50,0.35)'; g.lineWidth = 2;
-		for (let i = 1; i < 14; i++) { g.beginPath(); g.moveTo(i * W / 14, 0); g.lineTo(i * W / 14, H); g.stroke(); }
-	});
-	const paint = new THREE.MeshPhysicalMaterial({ map: camo, roughness: 0.55, metalness: 0.25, clearcoat: 0.3, clearcoatRoughness: 0.4 });
-	const grey = new THREE.MeshPhysicalMaterial({ color: 0x75808a, roughness: 0.55, metalness: 0.25, clearcoat: 0.25, side: THREE.DoubleSide });
-	const greyD = new THREE.MeshPhysicalMaterial({ color: 0x5f6973, roughness: 0.55, metalness: 0.25, clearcoat: 0.25, side: THREE.DoubleSide });
+		// stencils
+		g.fillStyle = 'rgba(40,45,50,0.6)'; g.font = 'bold 14px Arial';
+		g.save(); g.translate(0.3 * W, 0.62 * H); g.scale(1, -1); g.fillText('RESCUE', 0, 0); g.restore();
+		g.fillStyle = 'rgba(200,60,40,0.7)'; g.fillRect(0.29 * W, 0.66 * H, 40, 4);
+	}, JET_FUS, jetGrime, 17, 2.6);
+	const paint = skinMat(fusSkin, { metalness: 0.2, clearcoat: 0.25, clearcoatRoughness: 0.45 });
+	const wingSkin = skin(1024, 512, 0.55, (g, W, H) => {
+		g.fillStyle = '#75808a'; g.fillRect(0, 0, W, H);
+		const rnd = seeded(41);
+		g.fillStyle = '#5f6a75';
+		for (let i = 0; i < 12; i++) { g.beginPath(); const x = rnd() * W, y = rnd() * H; g.moveTo(x, y); for (let k = 0; k < 4; k++) g.lineTo(x + (rnd() - 0.5) * 300, y + (rnd() - 0.5) * 260); g.fill(); }
+		// low-visibility roundel near the tip
+		const cx = 0.74 * W, cy = 0.55 * H, R = 0.14 * H;
+		g.strokeStyle = 'rgba(55,62,70,0.9)'; g.lineWidth = 5; g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+		g.fillStyle = 'rgba(55,62,70,0.9)';
+		g.beginPath(); g.moveTo(cx, cy - R * 0.7); g.lineTo(cx + R * 0.6, cy + R * 0.45); g.lineTo(cx, cy + R * 0.15); g.lineTo(cx - R * 0.6, cy + R * 0.45); g.fill();
+	}, WING, null, 29, 2.4);
+	const grey = skinMat(wingSkin, { metalness: 0.2, clearcoat: 0.2, clearcoatRoughness: 0.45, side: THREE.DoubleSide });
+	const greyD = skinMat(plainSkin('#5f6973', 0.55, TAIL, 37, 512, 256), { metalness: 0.2, clearcoat: 0.2, clearcoatRoughness: 0.45, side: THREE.DoubleSide });
 	const S = (z, w, ht, hb, yc, n = 2.4) => [z, w, ht, hb, yc, n];
 	const fus = loft([
 		S(-8.15, 0.01, 0.01, 0.01, -0.02, 2),

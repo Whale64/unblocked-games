@@ -46,8 +46,10 @@ export class HUD {
 		if (!this.visible || !t) return;
 		const s = Math.min(1.25, Math.max(0.7, Math.min(w, h) / 820));
 		g.save();
-		g.shadowColor = 'rgba(0,0,0,0.75)';
-		g.shadowBlur = 3;
+		// cheap 1px drop shadow for legibility (blurred canvas shadows are very slow)
+		g.shadowColor = 'rgba(0,0,0,0.6)';
+		g.shadowBlur = 0;
+		g.shadowOffsetX = 1; g.shadowOffsetY = 1;
 		g.lineWidth = 1.6 * s;
 		g.strokeStyle = GREEN;
 		g.fillStyle = GREEN;

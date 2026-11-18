@@ -4,17 +4,20 @@ import * as THREE from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ATMOS_GLSL } from './atmosphere.js';
-import { createCloudMaterial } from './clouds.js';
+import { createCloudMaterial, DEPTH_GLSL, WEATHER_SCALE } from './clouds.js';
 
 const QUAD_VERT = /* glsl */`varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
 const COMPOSITE_FRAG = /* glsl */`
 precision highp float;
 ${ATMOS_GLSL}
-uniform sampler2D tScene, tDepth, tClouds;
+${DEPTH_GLSL}
+uniform sampler2D tScene, tDepth, tClouds, tWeather;
 uniform mat4 uInvProj, uCamWorld;
 uniform vec3 uCamPos;
-uniform float uLogF;
+uniform float uCirrus;
+uniform vec3 uCirrusLight;
+uniform vec2 uWind;
 uniform vec3 uSunDir, uMoonDir;
 uniform vec3 uSunRad;
 uniform float uNight;
@@ -56,9 +59,22 @@ void main() {
 	float d = texture2D(tDepth, vUv).x;
 	vec3 col;
 	float sceneDist = 1e9;
-	if (d >= 0.999999) {
+	if (isSkyDepth(d)) {
 		col = sampleSky(dir) + uNightSky * (0.4 + 0.6 * max(dir.y, 0.0));
 		float horizonFade = smoothstep(-0.02, 0.06, dir.y);
+		// high cirrus deck (~9.5 km): thin ice cloud, strongly forward scattering
+		if (uCirrus > 0.0 && dir.y > 0.004 && uCamPos.y < 9300.0) {
+			float tc = (9500.0 - uCamPos.y) / dir.y;
+			vec2 cp = uCamPos.xz + dir.xz * tc + uWind * 2.5;
+			float c1 = texture2D(tWeather, cp * vec2(1.0, 0.28) / 70000.0 + 0.37).g;
+			float c2 = texture2D(tWeather, cp * vec2(0.35, 1.0) / 21000.0 + 0.11).r;
+			float c3 = texture2D(tWeather, cp / 5200.0).r;
+			float cir = smoothstep(0.42, 0.85, c1 * 0.65 + c2 * 0.35) * (0.55 + 0.45 * c3);
+			cir *= smoothstep(0.004, 0.09, dir.y) * uCirrus;
+			float mu = dot(dir, uSunDir);
+			vec3 cl = uCirrusLight * (0.35 + 3.0 * aHG(0.7, mu)) + sampleSky(vec3(0.0, 1.0, 0.0)) * 0.6;
+			col = mix(col, cl, cir * 0.55);
+		}
 		// sun disc with limb darkening
 		float cs = dot(dir, uSunDir);
 		float sunR = 0.0062;
@@ -82,7 +98,7 @@ void main() {
 		col += exp(-am * 30.0) * vec3(0.02, 0.025, 0.035) * uNight;
 		if (uNight > 0.01) col += stars(dir) * uNight * horizonFade;
 	} else {
-		sceneDist = (exp2(d * uLogF) - 1.0) / max(-dirV.z, 1e-4);
+		sceneDist = depthViewZ(d) / max(-dirV.z, 1e-4);
 		vec3 s = texture2D(tScene, vUv).rgb;
 		vec3 Tf = aerialTransmittance(uCamPos.y, dir, sceneDist);
 		col = s * Tf + (aerialInscatter(dir) + uNightSky) * (1.0 - Tf);
@@ -107,7 +123,9 @@ void main() {
 
 const FINAL_FRAG = /* glsl */`
 precision highp float;
-uniform sampler2D tColor, tDepth, tClouds;
+${DEPTH_GLSL}
+uniform sampler2D tColor, tDepth, tClouds, tRays;
+uniform vec3 uRayTint;
 uniform vec2 uRes;
 uniform vec2 uSunUV;
 uniform float uSunOnScreen;
@@ -143,7 +161,7 @@ float sunVisibility() {
 		vec2 o = vec2(float(i % 3) - 1.0, float(i / 3) - 1.0) * 4.0 / uRes;
 		vec2 uv = uSunUV + o;
 		if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) continue;
-		float sky = step(0.999999, texture2D(tDepth, uv).x);
+		float sky = isSkyDepth(texture2D(tDepth, uv).x) ? 1.0 : 0.0;
 		float cl = uCloudsOn > 0.5 ? texture2D(tClouds, uv).a : 1.0;
 		v += sky * cl;
 	}
@@ -183,7 +201,16 @@ void main() {
 		col += fl * uSunTint * vis;
 	}
 
+	// crepuscular rays (computed at quarter resolution)
+	col += texture2D(tRays, uv).r * uRayTint;
+
 	col = ACESFitted(col);
+	// filmic grade: gentle S-curve, a touch of saturation, warm highlights / cool shadows
+	float lumG = dot(col, vec3(0.2126, 0.7152, 0.0722));
+	col = mix(vec3(lumG), col, 1.12);
+	col = clamp(col, 0.0, 1.0);
+	col = mix(col, col * col * (3.0 - 2.0 * col), 0.22);
+	col *= mix(vec3(0.98, 1.0, 1.035), vec3(1.035, 1.0, 0.965), smoothstep(0.15, 0.8, lumG));
 	// G-induced grey-out / red-out
 	float lum = dot(col, vec3(0.299, 0.587, 0.114));
 	float tunnel = smoothstep(0.75, 0.15, length(dc * vec2(1.3, 1.0)) / max(1.0 - uGray, 0.05));
@@ -202,38 +229,71 @@ void main() {
 }
 `;
 
+const RAYS_FRAG = /* glsl */`
+precision highp float;
+${DEPTH_GLSL}
+uniform sampler2D tDepth, tClouds;
+uniform vec2 uSunUV;
+uniform float uCloudsOn, uAspect, uFrame;
+varying vec2 vUv;
+float occ(vec2 uv) {
+	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
+	float sky = isSkyDepth(texture2D(tDepth, uv).x) ? 1.0 : 0.0;
+	return sky * (uCloudsOn > 0.5 ? texture2D(tClouds, uv).a : 1.0);
+}
+void main() {
+	vec2 delta = uSunUV - vUv;
+	const int N = 36;
+	vec2 stp = delta / float(N) * 0.95;
+	float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + uFrame * 0.618);
+	vec2 uv = vUv + stp * j;
+	float illum = 0.0, decay = 1.0;
+	for (int i = 0; i < N; i++) { illum += occ(uv) * decay; decay *= 0.965; uv += stp; }
+	illum /= float(N);
+	float r = length(delta * vec2(uAspect, 1.0));
+	gl_FragColor = vec4(illum * exp(-r * 2.2), 0.0, 0.0, 1.0);
+}`;
+
 export class PostFX {
-	constructor(renderer, atmosphere, cloudTex) {
+	constructor(renderer, atmosphere, cloudTex, reversedDepth) {
 		this.renderer = renderer;
 		this.atm = atmosphere;
 		this.cloudScale = 0.5;
 		this.samples = 4;
 		this.cloudsOn = true;
+		this.reversed = !!reversedDepth;
+		this.frame = 0;
+		this.prevViewProj = new THREE.Matrix4();
+		this.prevCamPos = new THREE.Vector3(1e9, 0, 0);
 		const w = 4, h = 4;
 		this.depthTex = new THREE.DepthTexture(w, h);
-		this.depthTex.type = THREE.UnsignedIntType;
+		this.depthTex.type = this.reversed ? THREE.FloatType : THREE.UnsignedIntType;
 		this.depthTex.minFilter = THREE.NearestFilter;
 		this.depthTex.magFilter = THREE.NearestFilter;
 		this.rtScene = new THREE.WebGLRenderTarget(w, h, {
 			type: THREE.HalfFloatType, samples: this.samples, depthTexture: this.depthTex, stencilBuffer: false,
 		});
-		this.rtClouds = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: false });
+		const cloudRT = () => new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: false });
+		this.rtCloudA = cloudRT(); this.rtCloudB = cloudRT();
 		this.rtComp = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: false });
+		this.rtRays = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: false });
 
 		this.cloudMat = createCloudMaterial(cloudTex, atmosphere.lut.texture, this.depthTex);
 		this.cloudQuad = new FullScreenQuad(this.cloudMat);
+		const depthU = () => ({ uDepthMode: { value: this.reversed ? 1 : 0 }, uNear: { value: 0.3 }, uFar: { value: 140000 }, uLogF: { value: 1 } });
 
 		this.compMat = new THREE.ShaderMaterial({
 			vertexShader: QUAD_VERT, fragmentShader: COMPOSITE_FRAG, depthTest: false, depthWrite: false,
 			uniforms: {
+				...depthU(),
 				tSkyLUT: { value: atmosphere.lut.texture },
 				tScene: { value: this.rtScene.texture },
 				tDepth: { value: this.depthTex },
-				tClouds: { value: this.rtClouds.texture },
+				tClouds: { value: this.rtCloudA.texture },
+				tWeather: { value: cloudTex.weather },
 				uInvProj: { value: new THREE.Matrix4() },
 				uCamWorld: { value: new THREE.Matrix4() },
 				uCamPos: { value: new THREE.Vector3() },
-				uLogF: { value: 1 },
 				uSunDir: { value: new THREE.Vector3() },
 				uMoonDir: { value: new THREE.Vector3() },
 				uSunRad: { value: new THREE.Color() },
@@ -244,18 +304,32 @@ export class PostFX {
 				uHaze: { value: 1e-5 }, uHazeH: { value: 1500 },
 				uTime: { value: 0 },
 				uCloudTexel: { value: new THREE.Vector2(0.002, 0.002) },
+				uCirrus: { value: 0.6 }, uCirrusLight: { value: new THREE.Color() }, uWind: { value: new THREE.Vector2() },
 			},
 		});
 		this.compQuad = new FullScreenQuad(this.compMat);
 
-		this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.32, 0.55, 1.6);
+		this.raysMat = new THREE.ShaderMaterial({
+			vertexShader: QUAD_VERT, fragmentShader: RAYS_FRAG, depthTest: false, depthWrite: false,
+			uniforms: {
+				...depthU(),
+				tDepth: { value: this.depthTex }, tClouds: { value: this.rtCloudA.texture },
+				uSunUV: { value: new THREE.Vector2() }, uCloudsOn: { value: 1 }, uAspect: { value: 1 }, uFrame: { value: 0 },
+			},
+		});
+		this.raysQuad = new FullScreenQuad(this.raysMat);
+
+		this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.6, 1.6);
 
 		this.finalMat = new THREE.ShaderMaterial({
 			vertexShader: QUAD_VERT, fragmentShader: FINAL_FRAG, depthTest: false, depthWrite: false,
 			uniforms: {
+				...depthU(),
 				tColor: { value: this.rtComp.texture },
 				tDepth: { value: this.depthTex },
-				tClouds: { value: this.rtClouds.texture },
+				tClouds: { value: this.rtCloudA.texture },
+				tRays: { value: this.rtRays.texture },
+				uRayTint: { value: new THREE.Color(0, 0, 0) },
 				uRes: { value: new THREE.Vector2(w, h) },
 				uSunUV: { value: new THREE.Vector2() },
 				uSunOnScreen: { value: 0 },
@@ -268,6 +342,7 @@ export class PostFX {
 		});
 		this.finalQuad = new FullScreenQuad(this.finalMat);
 		this._v = new THREE.Vector3();
+		this._fwd = new THREE.Vector3();
 	}
 
 	setQuality(q) {
@@ -276,6 +351,7 @@ export class PostFX {
 		this.cloudScale = q.cloudScale;
 		this.cloudMat.uniforms.uSteps.value = q.cloudSteps;
 		this.bloomOn = q.bloom;
+		this.raysOn = q.godRays !== false;
 		this.rtScene.dispose();
 		if (this.width) this.setSize(this.width, this.height);
 	}
@@ -285,31 +361,41 @@ export class PostFX {
 		this.rtScene.setSize(w, h);
 		this.rtComp.setSize(w, h);
 		const cw = Math.max(1, Math.round(w * this.cloudScale)), ch = Math.max(1, Math.round(h * this.cloudScale));
-		this.rtClouds.setSize(cw, ch);
+		this.rtCloudA.setSize(cw, ch); this.rtCloudB.setSize(cw, ch);
+		this.rtRays.setSize(Math.max(1, Math.round(w / 4)), Math.max(1, Math.round(h / 4)));
 		this.compMat.uniforms.uCloudTexel.value.set(1 / cw, 1 / ch);
 		this.bloom.setSize(w, h);
 		this.finalMat.uniforms.uRes.value.set(w, h);
 		this.cloudMat.uniforms.uFullRes.value.set(w, h);
+		this.raysMat.uniforms.uAspect.value = w / h;
+		this.historyValid = false;
+	}
+
+	_depthUniforms(u, camera) {
+		u.uNear.value = camera.near; u.uFar.value = camera.far; u.uLogF.value = Math.log2(camera.far + 1);
 	}
 
 	render(scene, camera, env) {
 		const r = this.renderer;
 		const atm = this.atm;
 		camera.updateMatrixWorld();
-		const logF = Math.log2(camera.far + 1);
+		this.frame = (this.frame + 1) % 1024;
 
 		r.setRenderTarget(this.rtScene);
 		r.setClearColor(0x000000, 1);
 		r.clear(true, true, false);
 		r.render(scene, camera);
 
+		// ---- volumetric clouds (reduced resolution + temporal reprojection)
 		const cu = this.cloudMat.uniforms;
 		const cloudsOn = this.cloudsOn && env.coverage > 0.01;
+		const write = this.rtCloudA, read = this.rtCloudB;
 		if (cloudsOn) {
+			this._depthUniforms(cu, camera);
+			cu.uDepthMode.value = this.reversed ? 1 : 0;
 			cu.uInvProj.value.copy(camera.projectionMatrixInverse);
 			cu.uCamWorld.value.copy(camera.matrixWorld);
 			cu.uCamPos.value.copy(camera.position);
-			cu.uLogF.value = logF;
 			cu.uLightDir.value.copy(atm.lightDir);
 			cu.uSunLight.value.copy(atm.cloudLight);
 			cu.uGroundBounce.value.copy(atm.groundBounce);
@@ -319,15 +405,26 @@ export class PostFX {
 			cu.uWind.value.copy(env.cloudOffset);
 			cu.uTime.value = env.time;
 			cu.uHaze.value = env.haze; cu.uHazeH.value = env.hazeH;
-			r.setRenderTarget(this.rtClouds);
+			cu.uFrame.value = this.frame;
+			const jump = camera.position.distanceTo(this.prevCamPos) > 250;
+			cu.uHistoryWeight.value = this.historyValid && !jump && this.cloudsWereOn ? 0.86 : 0;
+			cu.tHistory.value = read.texture;
+			cu.uPrevViewProj.value.copy(this.prevViewProj);
+			r.setRenderTarget(write);
 			this.cloudQuad.render(r);
+			this.historyValid = true;
 		}
+		this.cloudsWereOn = cloudsOn;
+		this.prevViewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+		this.prevCamPos.copy(camera.position);
 
+		// ---- atmosphere composite
 		const u = this.compMat.uniforms;
+		this._depthUniforms(u, camera);
+		u.tClouds.value = write.texture;
 		u.uInvProj.value.copy(camera.projectionMatrixInverse);
 		u.uCamWorld.value.copy(camera.matrixWorld);
 		u.uCamPos.value.copy(camera.position);
-		u.uLogF.value = logF;
 		u.uSunDir.value.copy(atm.sunDir);
 		u.uMoonDir.value.copy(atm.moonDir);
 		const sr = 0.0062;
@@ -340,19 +437,40 @@ export class PostFX {
 		u.uCloudBase.value = env.cloudBase; u.uCloudTop.value = env.cloudTop;
 		u.uHaze.value = env.haze; u.uHazeH.value = env.hazeH;
 		u.uTime.value = env.time;
+		u.uCirrus.value = env.cirrus ?? 0.6;
+		u.uCirrusLight.value.copy(atm.cloudLight).multiplyScalar(0.12);
+		u.uWind.value.copy(env.cloudOffset);
 		r.setRenderTarget(this.rtComp);
 		this.compQuad.render(r);
 
 		if (this.bloomOn !== false) this.bloom.render(r, null, this.rtComp, 0, false);
 
-		// sun screen position for flare
+		// ---- sun screen position: lens flare + god rays
 		const f = this.finalMat.uniforms;
 		const sp = this._v.copy(atm.sunDir).multiplyScalar(10000).add(camera.position).project(camera);
-		const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-		const front = camFwd.dot(atm.sunDir) > 0 && atm.sunDir.y > -0.02;
+		const camFwd = this._fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+		const facing = camFwd.dot(atm.sunDir);
+		const front = facing > 0 && atm.sunDir.y > -0.02;
 		f.uSunUV.value.set(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5);
 		const edge = Math.max(Math.abs(sp.x), Math.abs(sp.y));
-		f.uSunOnScreen.value = front ? THREE.MathUtils.clamp((1.15 - edge) * 3, 0, 1) * THREE.MathUtils.smoothstep(atm.sunDir.y, -0.02, 0.05) : 0;
+		const sunUp = THREE.MathUtils.smoothstep(atm.sunDir.y, -0.02, 0.05);
+		f.uSunOnScreen.value = front ? THREE.MathUtils.clamp((1.15 - edge) * 3, 0, 1) * sunUp : 0;
+		const rayAmt = this.raysOn && front ? THREE.MathUtils.clamp((1.8 - edge) * 1.2, 0, 1) * sunUp * Math.pow(facing, 2) : 0;
+		if (rayAmt > 0.001) {
+			const ru = this.raysMat.uniforms;
+			this._depthUniforms(ru, camera);
+			ru.tClouds.value = write.texture;
+			ru.uSunUV.value.copy(f.uSunUV.value);
+			ru.uCloudsOn.value = cloudsOn ? 1 : 0;
+			ru.uFrame.value = this.frame;
+			r.setRenderTarget(this.rtRays);
+			this.raysQuad.render(r);
+			const k = rayAmt * env.exposure * 20 * 0.045 * (1 + env.haze * 4000);
+			f.uRayTint.value.copy(atm.sunColorT).multiplyScalar(k);
+		} else f.uRayTint.value.setRGB(0, 0, 0);
+
+		this._depthUniforms(f, camera);
+		f.tClouds.value = write.texture;
 		f.uSunTint.value.copy(atm.sunColorT);
 		f.uTime.value = env.time;
 		f.uGray.value = env.grayout || 0;
@@ -362,5 +480,8 @@ export class PostFX {
 		f.uCloudsOn.value = cloudsOn ? 1 : 0;
 		r.setRenderTarget(null);
 		this.finalQuad.render(r);
+
+		// swap cloud history buffers
+		if (cloudsOn) { this.rtCloudA = read; this.rtCloudB = write; }
 	}
 }
