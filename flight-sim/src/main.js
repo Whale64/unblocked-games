@@ -60,7 +60,7 @@ function detectQuality() {
 }
 
 function loadSettings() {
-	const def = { aircraft: 'sparrow', spawn: 'runway', time: 9.5, weather: 'scattered', windSpeed: 8, windDir: 120, turbulence: 0.3, quality: null, invert: false, assist: true, mouseYoke: false, timeFlow: false, volume: 0.8 };
+	const def = { aircraft: 'sparrow', spawn: 'runway', time: 9.5, weather: 'scattered', windSpeed: 8, windDir: 120, turbulence: 0.3, quality: null, invert: false, assist: true, mouseYoke: false, timeFlow: false, volume: 0.8, depthMode: 'auto' };
 	let s = def;
 	try { s = { ...def, ...JSON.parse(localStorage.getItem('skyward-settings') || '{}') }; } catch { /* storage unavailable */ }
 	if (!s.quality || !QUALITY[s.quality]) s.quality = detectQuality();
@@ -85,7 +85,7 @@ class Game {
 		// Reversed-Z float depth keeps early-Z culling and gives better precision than a log depth buffer.
 		let reversed = false;
 		try { const pc = document.createElement('canvas').getContext('webgl2'); reversed = !!(pc && pc.getExtension('EXT_clip_control')); } catch { reversed = false; }
-		if (/[?&]logdepth/.test(location.search)) reversed = false;
+		if (/[?&]logdepth/.test(location.search) || this.settings.depthMode === 'log') reversed = false;
 		this.reversedDepth = reversed;
 		try {
 			renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: !reversed, reversedDepthBuffer: reversed, powerPreference: 'high-performance', stencil: false });
@@ -135,7 +135,8 @@ class Game {
 		this.sun = new THREE.DirectionalLight(0xffffff, 1);
 		this.sun.castShadow = q.shadows > 0;
 		this.sun.shadow.mapSize.set(q.shadows || 1024, q.shadows || 1024);
-		this.sun.shadow.bias = -0.0004;
+		// three.js applies the bias unchanged under reversed-Z, where 'closer' is a larger depth value
+		this.sun.shadow.bias = reversed ? 0.0003 : -0.0003;
 		this.sun.shadow.normalBias = 0.04;
 		this.scene.add(this.sun, this.sun.target);
 		this.landingLight = new THREE.SpotLight(0xfff4e0, 0, 1200, 0.32, 0.5, 1.4);
@@ -267,6 +268,7 @@ class Game {
 		bind('mouse-yoke', 'mouseYoke');
 		bind('time-flow', 'timeFlow');
 		bind('volume', 'volume', parseFloat, () => this.audio.setVolume(s.volume));
+		bind('depth-mode', 'depthMode', String, () => { saveSettings(s); location.reload(); });
 		this.updateMenuLabels();
 		$('fly').onclick = () => this.startFlight();
 		$('resume').onclick = () => this.togglePause(false);
@@ -680,8 +682,17 @@ class Game {
 		this.sun.shadow.camera.top = sr; this.sun.shadow.camera.bottom = -sr;
 		this.sun.shadow.camera.near = 1; this.sun.shadow.camera.far = 1200;
 		this.sun.shadow.camera.updateProjectionMatrix();
-		this.sun.target.position.copy(focus);
-		this.sun.position.copy(focus).addScaledVector(atm.lightDir, 600);
+		// snap the shadow frustum to whole shadow-map texels so shadow edges don't swim/flicker as we move
+		const L = atm.lightDir;
+		const U = (this._sU || (this._sU = new THREE.Vector3())).set(0, 1, 0).cross(L).normalize();
+		const V = (this._sV || (this._sV = new THREE.Vector3())).crossVectors(L, U);
+		const texel = (2 * sr) / (this.sun.shadow.mapSize.x || 1024);
+		const fu = focus.dot(U), fv = focus.dot(V);
+		const snapped = (this._sF || (this._sF = new THREE.Vector3())).copy(focus)
+			.addScaledVector(U, Math.round(fu / texel) * texel - fu)
+			.addScaledVector(V, Math.round(fv / texel) * texel - fv);
+		this.sun.target.position.copy(snapped);
+		this.sun.position.copy(snapped).addScaledVector(L, 600);
 		this.sun.target.updateMatrixWorld();
 		// cloud lighting inputs
 		atm.cloudLight = (atm.cloudLight || new THREE.Color()).copy(atm.night > 0.5 ? atm.lightColor : atm.sunColorClouds).multiplyScalar(atm.night > 0.5 ? atm.lightIntensity : SUN_INTENSITY);

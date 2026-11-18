@@ -224,7 +224,7 @@ void main() {
 	col = toSRGB(clamp(col, 0.0, 1.0));
 	// grain + dither
 	float n = hash12(gl_FragCoord.xy + fract(uTime * 13.7) * 300.0) - 0.5;
-	col += n * (1.5 / 255.0 + 0.012 * (1.0 - lum));
+	col += n * (1.5 / 255.0 + 0.003 * (1.0 - lum));
 	gl_FragColor = vec4(col, 1.0);
 }
 `;
@@ -245,7 +245,7 @@ void main() {
 	vec2 delta = uSunUV - vUv;
 	const int N = 36;
 	vec2 stp = delta / float(N) * 0.95;
-	float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + uFrame * 0.618);
+	float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
 	vec2 uv = vUv + stp * j;
 	float illum = 0.0, decay = 1.0;
 	for (int i = 0; i < N; i++) { illum += occ(uv) * decay; decay *= 0.965; uv += stp; }
@@ -407,7 +407,7 @@ export class PostFX {
 			cu.uHaze.value = env.haze; cu.uHazeH.value = env.hazeH;
 			cu.uFrame.value = this.frame;
 			const jump = camera.position.distanceTo(this.prevCamPos) > 250;
-			cu.uHistoryWeight.value = this.historyValid && !jump && this.cloudsWereOn ? 0.86 : 0;
+			cu.uHistoryWeight.value = this.historyValid && !jump && this.cloudsWereOn ? 0.9 : 0;
 			cu.tHistory.value = read.texture;
 			cu.uPrevViewProj.value.copy(this.prevViewProj);
 			r.setRenderTarget(write);

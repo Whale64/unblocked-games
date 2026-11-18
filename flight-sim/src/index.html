@@ -158,6 +158,8 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 					<option value="low">Low (laptops / Chromebooks)</option><option value="medium">Medium</option>
 					<option value="high">High</option><option value="ultra">Ultra (fast GPU)</option></select><span class="val"></span></label>
 				<label class="row">Volume <input type="range" id="volume" min="0" max="1" step="0.05"><span class="val"></span></label>
+				<label class="row">Depth buffer <select id="depth-mode">
+					<option value="auto">Auto (reversed-Z, fastest)</option><option value="log">Compatibility (use if the world flickers)</option></select><span class="val"></span></label>
 			</div>
 		</div>
 		<div class="actions">

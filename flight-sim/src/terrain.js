@@ -799,9 +799,16 @@ export class Terrain {
 			built++;
 		}
 		// eviction
-		if (this.tiles.size > 900) {
-			const arr = [...this.tiles.values()].filter((t) => !t.mesh.visible).sort((a, b) => a.last - b.last);
-			for (let i = 0; i < arr.length && this.tiles.size > 700; i++) {
+		if (this.tiles.size > 1500) {
+			// keep every ancestor of a visible tile: they are needed the moment the view coarsens,
+			// and evicting them would leave holes that blink until rebuilt
+			const keep = new Set();
+			for (const t of out) {
+				let [l, ix, iz] = t.key.split(':').map(Number);
+				while (l > 0) { l--; ix = Math.floor(ix / 2); iz = Math.floor(iz / 2); keep.add(l + ':' + ix + ':' + iz); }
+			}
+			const arr = [...this.tiles.values()].filter((t) => !t.mesh.visible && !keep.has(t.key) && this.frame - t.last > 90).sort((a, b) => a.last - b.last);
+			for (let i = 0; i < arr.length && this.tiles.size > 1150; i++) {
 				this.group.remove(arr[i].mesh);
 				arr[i].mesh.geometry.dispose();
 				this.tiles.delete(arr[i].key);
@@ -903,7 +910,10 @@ export class Terrain {
 			this.treeCells.set(m.key, this._buildTreeCell(m.i, m.j));
 		}
 		for (const [key, cell] of this.treeCells) {
-			if (!needed.has(key)) { this._disposeCell(cell); this.treeCells.delete(key); continue; }
+			if (!needed.has(key)) {
+				const d = Math.hypot(cell.cx - cam.x, cell.cz - cam.z);
+				if (d > R + S * 1.2 || agl >= 5000) { this._disposeCell(cell); this.treeCells.delete(key); continue; }
+			}
 			const d = Math.hypot(cell.cx - cam.x, cell.cz - cam.z, agl * 0.7);
 			const near = d < this.treeNear + S * 0.7;
 			for (const t of Object.values(cell.types)) { t.near.visible = near; t.far.visible = !near; }

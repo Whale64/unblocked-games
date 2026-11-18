@@ -320,7 +320,7 @@ void main() {
 			vec2 puv = pc.xy / pc.w * 0.5 + 0.5;
 			if (puv.x > 0.0 && puv.y > 0.0 && puv.x < 1.0 && puv.y < 1.0) {
 				vec4 hist = texture2D(tHistory, puv);
-				float w = uHistoryWeight * (1.0 - smoothstep(0.25, 0.6, abs(hist.a - cur.a)));
+				float w = uHistoryWeight * (1.0 - smoothstep(0.4, 0.85, abs(hist.a - cur.a)));
 				outc = mix(cur, hist, w);
 			}
 		}
