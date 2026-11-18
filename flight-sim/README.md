@@ -92,7 +92,30 @@ Sound is synthesised live with WebAudio:
 | Restart | `Backspace` |
 | Help | `H` |
 
-**Gamepad**: the left stick flies the aircraft, the right stick works the rudder, and RT/LT move the throttle. The A, B, X and Y buttons toggle gear, change the camera and move the flaps; LB and RB apply the brakes.
+**Gamepad**: the left stick flies the aircraft, the right stick works the rudder, and RT/LT move the throttle. A toggles the gear, B changes the camera, and X/Y move the flaps. LB applies the brakes, RB holds the speed brake, and the D-pad trims.
+
+## Flight hardware: joysticks, sidesticks, yokes, throttles, pedals
+Any controller the browser exposes through the Gamepad API works, and you can use several at once. Each device gets its own profile, saved in the browser. Your stick, throttle quadrant and rudder pedals can all be plugged in together.
+
+1. Plug the device in and **press any button on it**. Browsers only reveal controllers after a button press.
+2. The game recognises the device type from its name and applies a starting layout:
+   - **Joystick / sidestick**: roll and pitch, twist for rudder, throttle lever, hat switch for looking around.
+   - **Yoke**: roll and pitch, throttle lever.
+   - **Throttle quadrant**: throttle.
+   - **Rudder pedals**: rudder, plus left and right toe brakes.
+   - **Gamepad**: standard layout.
+3. Open **Flight controllers** (main menu or pause menu) and run the **Setup wizard**. For each control it tells you which way to move it, then detects which axis you moved and whether it needs inverting. Skip any control you don't have.
+
+On the same panel:
+- Rebind any action to any axis, button or hat, and invert or remove bindings.
+- Watch live axis and button monitors for every device.
+- Set the deadzone and response curve, and switch rumble on or off.
+
+How the controls behave:
+- **Toe brakes** brake the left and right main wheels separately, so you can steer while taxiing with differential braking.
+- **Hardware levers** (throttle, flaps, trim wheel, speed brake) take effect only when you move them. The keyboard and spawn settings keep control until you touch the lever, so a lever resting at idle won't cut power on an approach start.
+- **Hat switch / POV** lets you look around in the cockpit and pan the chase and orbit cameras.
+- **Rumble**: gamepads with rumble motors shake on stall buffet, ground roll, touchdowns and crashes.
 **Touch**: drag anywhere on the screen to fly.
 
 ## Performance
@@ -129,6 +152,8 @@ npm run watch    # rebuild on change
 | `src/airport.js` | Buildings and runway lighting |
 | `src/hud.js` | HUD and instruments |
 | `src/audio.js` | Synthesised sound |
-| `src/controls.js` | Keyboard, mouse, gamepad and touch input |
+| `src/controls.js` | Keyboard, mouse, touch and hardware input merging |
+| `src/devices.js` | Flight hardware detection, profiles, binding capture and rumble |
+| `src/devices-ui.js` | Flight controllers panel and setup wizard |
 | `src/effects.js` | Particles and trails |
 | `src/main.js` | Game loop and UI |

@@ -76,6 +76,44 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 @media (max-width: 640px) { .keys { grid-template-columns: 1fr; } }
 .keys div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed rgba(255,255,255,0.07); }
 .keys div span:first-child { color: #cddbea; }
+#devices { z-index: 25; background: rgba(2,6,12,0.66); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+#devices .dialog { text-align: left; width: min(980px, 96vw); max-height: 92vh; overflow: auto; }
+.dev-empty { color: var(--muted); font-size: 14px; padding: 14px; border: 1px dashed var(--line); border-radius: 10px; }
+#dev-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin: 12px 0; }
+.dev-card { background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.dev-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; min-width: 0; }
+.dev-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-badge { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; background: rgba(92,200,255,0.16); color: var(--accent); padding: 2px 7px; border-radius: 99px; white-space: nowrap; }
+.dev-axes { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; }
+.dev-ax { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); }
+.bar, .meter { position: relative; flex: 1; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+.bar i, .meter i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+.meter { width: 120px; flex: none; }
+.meter.c::after, .bar::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.3); }
+.dev-btns { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 8px; }
+.dot { font-size: 9px; min-width: 18px; text-align: center; padding: 2px 3px; border-radius: 4px; background: rgba(255,255,255,0.06); color: var(--muted); }
+.dot.on { background: var(--accent2); color: #021018; }
+.dev-tools { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 8px 0 12px; font-size: 13px; color: #cddbea; }
+.dev-tools label { display: flex; gap: 8px; align-items: center; }
+.dev-tools input[type=range] { width: 120px; }
+#dev-bind { width: 100%; border-collapse: collapse; font-size: 13px; }
+#dev-bind th { text-align: left; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); padding: 14px 6px 6px; font-weight: 600; }
+#dev-bind td { padding: 5px 6px; border-top: 1px solid rgba(255,255,255,0.05); vertical-align: middle; }
+#dev-bind tr.ok td { background: rgba(134,255,168,0.12); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: rgba(255,255,255,0.07); border-radius: 6px; padding: 2px 4px 2px 8px; font-size: 12px; }
+.chip button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 3px; }
+.chip button:hover { color: #fff; }
+.none { color: rgba(255,255,255,0.25); }
+.btn.sm { padding: 5px 12px; font-size: 12px; letter-spacing: .04em; }
+.btns.row { flex-direction: row; justify-content: flex-end; }
+.capture { position: sticky; top: 0; z-index: 2; background: #10243a; border: 1px solid var(--accent); border-radius: 12px; padding: 16px 18px; margin: 10px 0; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+.cap-step { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); }
+.cap-title { font-size: 18px; font-weight: 700; margin: 4px 0; }
+.cap-prompt { font-size: 15px; color: #fff; }
+.cap-state { font-size: 12px; color: var(--warn); margin-bottom: 4px; }
+.cap-state.go { color: var(--accent2); }
+.cap-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -125,6 +163,7 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 		<div class="actions">
 			<button class="btn primary" id="fly">FLY ▸</button>
 			<button class="btn" id="help-btn">Controls</button>
+			<button class="btn" id="devices-btn">Flight controllers</button>
 			<span class="hint">Keyboard, mouse, gamepad or touch. Press <kbd>H</kbd> in flight for help, <kbd>Esc</kbd> to pause.</span>
 		</div>
 	</div>
@@ -137,6 +176,7 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 		<div class="btns">
 			<button class="btn primary" id="resume">Resume</button>
 			<button class="btn" id="restart">Restart flight</button>
+			<button class="btn" id="pause-devices">Flight controllers</button>
 			<button class="btn" id="to-menu">Main menu</button>
 		</div>
 	</div>
@@ -180,11 +220,29 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 			<div><span>Mute</span><span><kbd>N</kbd></span></div>
 			<div><span>Restart flight</span><span><kbd>Backspace</kbd></span></div>
 			<div><span>Pause / menu</span><span><kbd>Esc</kbd> / <kbd>P</kbd></span></div>
-			<div><span>Gamepad</span><span>L-stick fly · R-stick rudder · RT/LT throttle · A gear · B view · X/Y flaps · LB/RB brakes</span></div>
+			<div><span>Gamepad</span><span>L-stick fly · R-stick rudder · RT/LT throttle · A gear · B view · X/Y flaps · LB brakes · RB speed brake · D-pad trim</span></div>
+			<div><span>Joystick / yoke / pedals</span><span>Plug in, press a button, then menu → Flight controllers → Setup wizard</span></div>
 			<div><span>Touch</span><span>drag anywhere to fly</span></div>
 		</div>
 		<p class="hint" style="margin-top:14px"><b>First flight:</b> start on the runway, throttle to full, keep straight with <kbd>Q</kbd>/<kbd>E</kbd>, and gently pull back at rotation speed. On approach, follow the magenta ILS diamonds and the PAPI lights (2 white / 2 red = on glide path). Flare a few metres above the runway and aim for under 200 fpm at touchdown.</p>
 		<div class="btns"><button class="btn" id="help-close">Close</button></div>
+	</div>
+</div>
+
+<div id="devices" class="overlay hidden">
+	<div class="dialog">
+		<h2>FLIGHT CONTROLLERS</h2>
+		<div class="hint">Joysticks, sidesticks, yokes, throttle quadrants, rudder pedals (with toe brakes) and gamepads all work, and several can be used at once. Each device gets its own saved profile. Use <b>Setup wizard</b> to map your hardware by simply moving each control.</div>
+		<div id="dev-list"></div>
+		<div class="dev-tools">
+			<button class="btn primary sm" id="dev-wizard">Setup wizard</button>
+			<label>Deadzone <input type="range" id="dev-dz" min="0" max="0.25" step="0.01"></label>
+			<label>Response curve <input type="range" id="dev-curve" min="0" max="1" step="0.05"></label>
+			<label><input type="checkbox" id="dev-rumble"> Rumble / force feedback</label>
+		</div>
+		<div id="dev-capture" class="capture hidden"></div>
+		<table id="dev-bind"></table>
+		<div class="btns row" style="margin-top:14px"><button class="btn sm" id="dev-reset">Reset to defaults</button><button class="btn primary sm" id="dev-close">Done</button></div>
 	</div>
 </div>
 

@@ -15,6 +15,7 @@ import { Audio } from './audio.js';
 import { Effects } from './effects.js';
 import { spawnAircraft } from './spawn.js';
 import { HeightField, patchWorldLighting } from './worldlight.js';
+import { DevicesUI } from './devices-ui.js';
 
 const QUALITY = {
 	low: { pixelRatio: 0.75, msaa: 0, cloudScale: 0.35, cloudSteps: 20, bloom: false, godRays: false, shadows: 0, terrainN: 24, terrainSplit: 1.6, terrainMaxLevel: 6, treeRadius: 1500, treeNear: 450, treeDensity: 0.5, treeShadows: false, texSize: 256 },
@@ -275,6 +276,9 @@ class Game {
 		$('crash-menu').onclick = () => this.toMenu();
 		$('help-btn').onclick = () => $('help').classList.toggle('hidden');
 		$('help-close').onclick = () => $('help').classList.add('hidden');
+		this.devicesUI = new DevicesUI(this.controls.devices, $('devices'));
+		$('devices-btn').onclick = () => this.devicesUI.open();
+		$('pause-devices').onclick = () => this.devicesUI.open();
 	}
 
 	updateMenuLabels() {
@@ -385,14 +389,21 @@ class Game {
 		const idx = det.reduce((bi, d, i) => (Math.abs(d - fm.flapTarget) < Math.abs(det[bi] - fm.flapTarget) ? i : bi), 0);
 		if (c.hit('BracketRight') || c.hit('KeyX')) { fm.flapTarget = det[Math.min(det.length - 1, idx + 1)]; this.hud.toast(`Flaps ${Math.round(fm.flapTarget * (cfg.engine === 'prop' ? 30 : 20))}°`, '#fff', 1.4); this.audio.oneShot('click'); }
 		if (c.hit('BracketLeft') || c.hit('KeyZ')) { fm.flapTarget = det[Math.max(0, idx - 1)]; this.hud.toast(`Flaps ${Math.round(fm.flapTarget * (cfg.engine === 'prop' ? 30 : 20))}°`, '#fff', 1.4); this.audio.oneShot('click'); }
-		if (c.hit('KeyB') && c.shift()) { fm.parkBrake = !fm.parkBrake; this.hud.toast(fm.parkBrake ? 'Parking brake SET' : 'Parking brake released', '#ffc048'); }
+		if ((c.hit('KeyB') && c.shift()) || c.hit('DevPark')) { fm.parkBrake = !fm.parkBrake; this.hud.toast(fm.parkBrake ? 'Parking brake SET' : 'Parking brake released', '#ffc048'); }
 		if (c.hit('KeyM')) { c.mouseYoke = !c.mouseYoke; this.settings.mouseYoke = c.mouseYoke; this.hud.toast(c.mouseYoke ? 'Mouse yoke ON' : 'Mouse yoke OFF', '#fff'); }
 		if (c.hit('KeyT')) { this.clockHour = (this.clockHour + (c.shift() ? -0.5 : 0.5) + 24) % 24; this.atm.setTime(this.clockHour); }
 		if (c.hit('KeyK')) { this.settings.assist = !this.settings.assist; this.hud.toast(this.settings.assist ? 'Flight assist ON (path & bank hold)' : 'Flight assist OFF (raw controls)', '#fff', 2); }
 		if (c.hit('KeyN')) { this.audio.enabled = !this.audio.enabled; this.hud.toast(this.audio.enabled ? 'Sound on' : 'Sound muted', '#fff'); }
 		const trimRate = 0.25;
-		if (c.down('Comma', 'Home')) fm.trim = Math.max(-1, fm.trim - trimRate * this.dt);
-		if (c.down('Period', 'End')) fm.trim = Math.min(1, fm.trim + trimRate * this.dt);
+		if (c.down('Comma', 'Home', 'Dev_trimDown')) fm.trim = Math.max(-1, fm.trim - trimRate * this.dt);
+		if (c.down('Period', 'End', 'Dev_trimUp')) fm.trim = Math.min(1, fm.trim + trimRate * this.dt);
+		// absolute hardware levers act only when moved
+		if (c.trimLever.changed) fm.trim = c.trimLever.value;
+		if (c.flapsLever.changed) {
+			const target = det.reduce((best, d) => (Math.abs(d - c.flapsLever.value) < Math.abs(best - c.flapsLever.value) ? d : best), det[0]);
+			if (target !== fm.flapTarget) { fm.flapTarget = target; this.hud.toast(`Flaps ${Math.round(target * (cfg.engine === 'prop' ? 30 : 20))}°`, '#fff', 1.4); }
+		}
+		if (c.hit('DevRecenter')) { this.cam.headYaw = this.cam.headPitch = 0; this.cam.yaw = this.cam.pitch = 0; }
 	}
 
 	// ------------------------------------------------------------------ simulation
@@ -403,8 +414,9 @@ class Game {
 		if (this.paused || this.state !== 'flying') return;
 		const ctl = {
 			pitch: c.axes.pitch, roll: c.axes.roll, yaw: c.axes.yaw, throttle: c.throttle,
-			brake: c.down('Space', 'KeyB', 'PadBrake') && !c.shift() ? 1 : 0,
-			airbrake: c.down('KeyY', 'Slash'),
+			brake: c.down('Space', 'KeyB', 'Dev_brakes') && !c.shift() ? 1 : 0,
+			brakeL: c.brakeL, brakeR: c.brakeR,
+			airbrake: Math.max(c.down('KeyY', 'Slash', 'Dev_airbrakeHold') ? 1 : 0, c.airbrakeLever.bound ? c.airbrakeLever.value : 0),
 			assist: this.settings.assist,
 		};
 		this.ctl = ctl;
@@ -438,6 +450,7 @@ class Game {
 			if (water) { this.effects.splash(fm.pos, fm.vel); this.audio.oneShot('splash'); }
 			else { this.effects.explode(fm.pos.clone(), fm.vel.clone()); this.audio.oneShot('explosion'); this.flash = 1; }
 			this.model.root.visible = false;
+			this.controls.devices.rumble(1, 1, 700);
 			this.crashTimer = 2.5;
 			$('crash-reason').textContent = e.reason;
 			const t = fm.telemetry();
@@ -550,7 +563,9 @@ class Game {
 		let fov = 60;
 		const pos = fm.pos;
 		if (this.view === 'cockpit') {
-			if (md.dx || md.dy) { c.headYaw -= md.dx * 0.004; c.headPitch -= md.dy * 0.004; c.idle = 0; } else c.idle += dt;
+			const lk = this.controls.look;
+			if (lk.x || lk.y) { c.headYaw -= lk.x * dt * 1.9; c.headPitch += lk.y * dt * 1.3; c.idle = 0; }
+			else if (md.dx || md.dy) { c.headYaw -= md.dx * 0.004; c.headPitch -= md.dy * 0.004; c.idle = 0; } else c.idle += dt;
 			c.headYaw = THREE.MathUtils.clamp(c.headYaw, -2.6, 2.6);
 			c.headPitch = THREE.MathUtils.clamp(c.headPitch, -1.2, 1.3);
 			if (c.idle > 1.5 && !this.controls.mouse.dragging) { c.headYaw *= Math.exp(-dt * 2); c.headPitch *= Math.exp(-dt * 2); }
@@ -565,7 +580,9 @@ class Game {
 			cam.near = 0.3;
 			if (md.wheel) c.dist = THREE.MathUtils.clamp(c.dist * (1 + md.wheel * 0.1), cfg.chase.dist * 0.4, cfg.chase.dist * 6);
 			if (this.view === 'chase') {
-				if (md.dx || md.dy) { c.yaw -= md.dx * 0.005; c.pitch = THREE.MathUtils.clamp(c.pitch + md.dy * 0.004, -0.6, 1.2); c.idle = 0; } else c.idle += dt;
+				const lk = this.controls.look;
+				if (lk.x || lk.y) { c.yaw -= lk.x * dt * 1.8; c.pitch = THREE.MathUtils.clamp(c.pitch - lk.y * dt * 1.2, -0.6, 1.2); c.idle = 0; }
+				else if (md.dx || md.dy) { c.yaw -= md.dx * 0.005; c.pitch = THREE.MathUtils.clamp(c.pitch + md.dy * 0.004, -0.6, 1.2); c.idle = 0; } else c.idle += dt;
 				if (c.idle > 2 && !this.controls.mouse.dragging) { c.yaw *= Math.exp(-dt * 1.5); c.pitch *= Math.exp(-dt * 1.5); }
 				// lagged orientation (yaw/pitch follow, partial roll)
 				c.q.slerp(fm.quat, 1 - Math.exp(-dt * 3.5));
@@ -584,7 +601,9 @@ class Game {
 				cam.lookAt(look);
 				fov = 58 + Math.min(12, fm.tel.ias / 60);
 			} else if (this.view === 'orbit') {
-				if (md.dx || md.dy) { c.orbitYaw -= md.dx * 0.006; c.orbitPitch = THREE.MathUtils.clamp(c.orbitPitch + md.dy * 0.005, -1.4, 1.45); }
+				const lk = this.controls.look;
+				if (lk.x || lk.y) { c.orbitYaw -= lk.x * dt * 1.5; c.orbitPitch = THREE.MathUtils.clamp(c.orbitPitch - lk.y * dt * 1.0, -1.4, 1.45); }
+				else if (md.dx || md.dy) { c.orbitYaw -= md.dx * 0.006; c.orbitPitch = THREE.MathUtils.clamp(c.orbitPitch + md.dy * 0.005, -1.4, 1.45); }
 				else c.orbitYaw += dt * 0.05;
 				const off = new THREE.Vector3(0, 0, c.dist * 1.2).applyEuler(new THREE.Euler(-c.orbitPitch, c.orbitYaw, 0, 'YXZ'));
 				cam.position.copy(pos).add(off);
@@ -799,6 +818,18 @@ class Game {
 			this.audio.update({ ...tel, crashed: fm.crashed }, this.view, this.paused);
 		} else {
 			this.hud.draw(null, { dt, clock });
+		}
+		// flight hardware: connection notices, settings panel, force feedback
+		for (const d of this.controls.newDevices) {
+			const kind = { joystick: 'joystick / sidestick', yoke: 'yoke', throttle: 'throttle', pedals: 'rudder pedals', gamepad: 'gamepad' }[d.type];
+			this.hud.toast(`Connected ${kind}: ${d.name}. Calibrate it under Flight controllers`, '#9fe0ff', 5);
+			if (this.devicesUI) this.devicesUI.refresh();
+		}
+		if (this.devicesUI) this.devicesUI.update();
+		if (this.state === 'flying' && this.fm && !this.paused && !this.fm.crashed) {
+			const tl = this.fm.tel;
+			const rough = (tl.buffet || 0) * 0.7 + (tl.onGround ? Math.min(0.25, tl.gs / 300) : 0) + (this.cam ? this.cam.shake * 0.6 : 0);
+			if (rough > 0.05) this.controls.devices.rumble(rough, rough * 0.6, 120);
 		}
 		this.controls.endFrame();
 	}

@@ -1,4 +1,5 @@
-// Input handling: keyboard (with smoothed axes), mouse yoke, mouse look and gamepads.
+// Input handling: keyboard (with smoothed axes), mouse yoke, mouse look, touch and flight hardware.
+import { DeviceManager, BUTTON_ACTIONS } from './devices.js';
 export class Controls {
 	constructor(dom) {
 		this.keys = new Set();
@@ -8,7 +9,12 @@ export class Controls {
 		this.invertPitch = false;
 		this.mouseYoke = false;
 		this.mouse = { x: 0, y: 0, dx: 0, dy: 0, dragging: false, button: -1, wheel: 0 };
-		this.gamepadActive = false;
+		this.devices = new DeviceManager();
+		this.hwTouched = {};
+		this.newDevices = [];
+		this.look = { x: 0, y: 0 };
+		this.brakeL = 0; this.brakeR = 0;
+		this.flapsLever = this.trimLever = this.airbrakeLever = { value: 0, bound: false, changed: false };
 		this.dom = dom;
 		this.enabled = false;
 		window.addEventListener('keydown', (e) => {
@@ -91,32 +97,32 @@ export class Controls {
 			this.axes.pitch = Math.max(-1, Math.min(1, ty));
 		}
 
-		// gamepad
-		const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-		for (const gp of pads) {
-			if (!gp) continue;
-			const dz = (v) => (Math.abs(v) < 0.08 ? 0 : (v - Math.sign(v) * 0.08) / 0.92);
-			const lx = dz(gp.axes[0] || 0), ly = dz(gp.axes[1] || 0), rx = dz(gp.axes[2] || 0);
-			const used = Math.abs(lx) + Math.abs(ly) + Math.abs(rx) > 0 || gp.buttons.some((b) => b.pressed);
-			if (used) this.gamepadActive = true;
-			if (!this.gamepadActive) continue;
-			const curve = (v) => Math.sign(v) * (0.4 * Math.abs(v) + 0.6 * v * v);
-			if (!p && !this.touch) this.axes.pitch = curve(ly) * (this.invertPitch ? -1 : 1);
-			if (!r && !this.touch) this.axes.roll = curve(lx);
-			if (!y) this.axes.yaw = curve(rx);
-			const rt = gp.buttons[7] ? gp.buttons[7].value : 0, lt = gp.buttons[6] ? gp.buttons[6].value : 0;
-			this.throttle = Math.max(0, Math.min(1, this.throttle + (rt - lt) * dt * 0.6));
-			this.padButtons = gp.buttons.map((b) => b.pressed);
-			if (!this.prevPad) this.prevPad = this.padButtons.slice();
-			const edge = (i) => this.padButtons[i] && !this.prevPad[i];
-			if (edge(0)) this.pressed.add('KeyG');        // A: gear
-			if (edge(1)) this.pressed.add('KeyC');        // B: camera
-			if (edge(2)) this.pressed.add('BracketRight'); // X: flaps down
-			if (edge(3)) this.pressed.add('BracketLeft');  // Y: flaps up
-			if (edge(9)) this.pressed.add('Escape');       // start: pause
-			if (this.padButtons[4] || this.padButtons[5]) this.keys.add('PadBrake'); else this.keys.delete('PadBrake');
-			this.prevPad = this.padButtons.slice();
-			break;
+		// flight hardware: joysticks, sidesticks, yokes, throttles, pedals, gamepads
+		const dm = this.devices;
+		this.newDevices = dm.poll();
+		for (const [name, kb] of [['pitch', p], ['roll', r], ['yaw', y]]) {
+			const a = dm.axis(name);
+			if (!a.bound || kb || this.touch) continue;
+			// ignore an idle device so the mouse yoke / keyboard keep control of the axis
+			if (Math.abs(a.value) < 0.001 && !this.hwTouched[name]) continue;
+			this.hwTouched[name] = true;
+			this.axes[name] = name === 'pitch' && this.invertPitch ? -a.value : a.value;
 		}
+		const thr = dm.level('throttle');
+		if (thr.changed) this.throttle = thr.value;
+		const dThr = dm.hold('throttleUp') - dm.hold('throttleDown');
+		if (dThr) this.throttle = Math.max(0, Math.min(1, this.throttle + dThr * dt * 0.6));
+		this.brakeL = dm.level('brakeL').value;
+		this.brakeR = dm.level('brakeR').value;
+		this.flapsLever = dm.level('flaps');
+		this.trimLever = dm.level('trim');
+		this.airbrakeLever = dm.level('airbrake');
+		for (const act of BUTTON_ACTIONS) {
+			if (act.hold) {
+				const code = 'Dev_' + act.id;
+				if (dm.hold(act.id) > 0.5) this.keys.add(code); else this.keys.delete(code);
+			} else if (act.key && dm.hit(act.id)) this.pressed.add(act.key);
+		}
+		this.look = dm.look();
 	}
 }

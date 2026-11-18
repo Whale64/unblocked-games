@@ -50,6 +50,7 @@ export class FlightModel {
 		this.trim = 0;
 		this.brake = 0;
 		this.parkBrake = false;
+		this.brakeL = 0; this.brakeR = 0;
 		this.gearState = cfg.gear.map(() => ({ comp: 0, contact: false, wheelRot: 0, load: 0 }));
 		this.crashed = false;
 		this.crashReason = '';
@@ -228,15 +229,19 @@ export class FlightModel {
 			this.lawI = this.de; // bumpless transfer
 			this.bankRef = null;
 			this.gammaRef = null;
-			if (ctl.assist && this.onGround && Math.abs(ctl.yaw) < 0.02) rCmd -= r * 3.0;
+			if (ctl.assist && this.onGround && Math.abs(ctl.yaw) < 0.02 && Math.abs((ctl.brakeL || 0) - (ctl.brakeR || 0)) < 0.1) rCmd -= r * 3.0;
 		}
 		this.de = rateLim(this.de, clamp(eCmd, -1, 1), 4);
 		this.da = rateLim(this.da, clamp(aCmd, -1, 1), 5);
 		this.dr = rateLim(this.dr, clamp(rCmd, -1, 1), 4);
 		this.flap = rateLim(this.flap, this.flapTarget, c.flapRate);
 		if (c.retractable) this.gearPos = rateLim(this.gearPos, this.gearDown ? 1 : 0, 1 / c.gearTime);
-		this.airbrake = rateLim(this.airbrake, ctl.airbrake ? 1 : 0, 1.2);
-		this.brake = ctl.brake || (this.parkBrake ? 1 : 0);
+		this.airbrake = rateLim(this.airbrake, clamp(Number(ctl.airbrake) || 0, 0, 1), 1.2);
+		// differential toe brakes: left/right main wheels can be braked independently
+		const park = this.parkBrake ? 1 : 0;
+		this.brakeL = Math.max(ctl.brake || 0, ctl.brakeL || 0, park);
+		this.brakeR = Math.max(ctl.brake || 0, ctl.brakeR || 0, park);
+		this.brake = Math.max(this.brakeL, this.brakeR);
 
 		// ---- aerodynamic coefficients
 		const sf = sstep(c.alphaStall, c.alphaStall + 5 * Math.PI / 180, Math.abs(alpha));
@@ -341,7 +346,8 @@ export class FlightModel {
 			fwdB.addScaledVector(nv, -fwdB.dot(nv)).normalize();
 			const side = new THREE.Vector3().crossVectors(fwdB, nv).normalize();
 			const vf = vpt.dot(fwdB), vs = vpt.dot(side);
-			const mu = 0.018 + (g.brake ? this.brake * 0.75 : 0);
+			const wb = g.p[0] < -0.01 ? this.brakeL : g.p[0] > 0.01 ? this.brakeR : this.brake;
+			const mu = 0.018 + (g.brake ? wb * 0.75 : 0);
 			const Ff = -Math.sign(vf) * mu * Fn * Math.min(1, Math.abs(vf) / 0.35);
 			const Fs = -Math.sign(vs) * 0.85 * Fn * Math.min(1, Math.abs(vs) / 0.2);
 			const Fc = nv.clone().multiplyScalar(Fn).addScaledVector(fwdB, Ff).addScaledVector(side, Fs);
