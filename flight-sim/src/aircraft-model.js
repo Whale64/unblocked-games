@@ -1,6 +1,7 @@
 // Procedural aircraft geometry: lofted superellipse fuselages, NACA 4-digit airfoil wings with
 // hinged control surfaces, canopies, landing gear, propeller / jet nozzle with afterburner.
 import * as THREE from 'three';
+import { createInstruments } from './instruments.js';
 
 // ---------------------------------------------------------------- helpers
 const sgnPow = (x, e) => Math.sign(x) * Math.pow(Math.abs(x), e);
@@ -378,7 +379,12 @@ export function skinMat(sk, opts) {
 }
 
 // ---------------------------------------------------------------- aircraft builders
-export function buildAircraft(cfg) {
+let NO_AVIONICS = false;
+export function buildAircraft(cfg, opts = {}) {
+	NO_AVIONICS = !!opts.parked;
+	try { return buildAircraftInner(cfg); } finally { NO_AVIONICS = false; }
+}
+function buildAircraftInner(cfg) {
 	if (cfg.category === 'airliner') return buildAirliner(cfg);
 	return cfg.id === 'kestrel' ? buildJet(cfg) : buildTrainer(cfg);
 }
@@ -399,27 +405,39 @@ function finalize(root) {
 	root.traverse((o) => { if (o.isMesh && !o.material.transparent) { o.castShadow = true; o.receiveShadow = true; } });
 }
 
-function buildCockpit(eye, width, panelColor) {
+function buildCockpit(eye, width, panelColor, cfg) {
 	const grp = new THREE.Group();
 	const panelMat = new THREE.MeshStandardMaterial({ color: panelColor, roughness: 0.75 });
-	const panel = new THREE.Mesh(new THREE.BoxGeometry(width, 0.32, 0.08), panelMat);
-	panel.position.set(0, eye[1] - 0.36, eye[2] - 0.72);
+	const big = cfg && cfg.category === 'airliner';
+	const ph = big ? 0.3 : 0.32, depth = 0.06;
+	const panel = new THREE.Mesh(new THREE.BoxGeometry(width, ph, depth), panelMat);
+	panel.position.set(0, eye[1] - (big ? 0.33 : 0.36), eye[2] - (big ? 0.72 : 0.72));
 	panel.rotation.x = -0.25;
 	const glare = new THREE.Mesh(new THREE.BoxGeometry(width * 1.02, 0.05, 0.25), panelMat);
-	glare.position.set(0, eye[1] - 0.2, eye[2] - 0.78);
+	glare.position.set(0, panel.position.y + ph / 2 + 0.02, panel.position.z - 0.06);
 	grp.add(panel, glare);
-	// gauges
-	const gMat = new THREE.MeshStandardMaterial({ color: 0x0b0d0f, roughness: 0.25, metalness: 0.2, emissive: 0x0a1810, emissiveIntensity: 0.02 });
-	for (let i = 0; i < 6; i++) {
-		const g = new THREE.Mesh(new THREE.CircleGeometry(0.055, 20), gMat);
-		g.position.set((i % 3 - 1) * 0.16 - 0.05, eye[1] - 0.31 - Math.floor(i / 3) * 0.13, eye[2] - 0.675 + Math.floor(i / 3) * 0.03);
-		g.rotation.x = -0.25;
-		grp.add(g);
+	// live avionics on the panel face
+	if (cfg && !NO_AVIONICS) grp.userData.instruments = createInstruments(cfg, panel, width, ph, depth);
+	// throttle levers on the pedestal / side console
+	const levers = [];
+	const nLev = cfg && cfg.engines ? cfg.engines.length : 1;
+	for (let i = 0; i < nLev; i++) {
+		const lv = new THREE.Group();
+		const arm = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.16, 0.02), new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.8, roughness: 0.3 }));
+		arm.position.y = 0.08;
+		const knob = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.03), new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.6 }));
+		knob.position.y = 0.17;
+		lv.add(arm, knob);
+		lv.position.set(big ? 0.42 + i * 0.07 : -0.28, eye[1] - 0.62, eye[2] - (big ? 0.38 : 0.3));
+		grp.add(lv);
+		levers.push(lv);
 	}
-	const mfdMat = new THREE.MeshStandardMaterial({ color: 0x050807, roughness: 0.15, emissive: 0x1d6040, emissiveIntensity: 0.05 });
-	const mfd = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.13), mfdMat);
-	mfd.position.set(0.24, eye[1] - 0.37, eye[2] - 0.67); mfd.rotation.x = -0.25;
-	grp.add(mfd);
+	if (big) {
+		const ped = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.6), panelMat);
+		ped.position.set(0.455, eye[1] - 0.68, eye[2] - 0.33);
+		grp.add(ped);
+	}
+	grp.userData.levers = levers;
 	// control stick
 	const stick = new THREE.Group();
 	const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.42, 8), panelMat);
@@ -430,7 +448,7 @@ function buildCockpit(eye, width, panelColor) {
 	stick.position.set(0, eye[1] - 0.9, eye[2] - 0.38);
 	grp.add(stick);
 	grp.userData.stick = stick;
-	grp.userData.glow = [gMat, mfdMat];
+	grp.userData.glow = [];
 	return grp;
 }
 
@@ -593,11 +611,13 @@ function buildTrainer(cfg) {
 		gear.push({ grp, wheel: wh, base: wpos.clone(), strut });
 	});
 
-	const cockpit = buildCockpit(cfg.eye, 0.8, 0x2a2c30);
+	const cockpit = buildCockpit(cfg.eye, 0.8, 0x2a2c30, cfg);
 	const pilot = buildPilot(cfg.eye, 0x3b4a2a);
 	root.add(cockpit, pilot);
 	finalize(root);
-	return { root, surfaces, prop, disc, discMat, gear, canopy, cockpit, pilot, type: 'prop', spinner };
+	const e = cfg.eye;
+	return { root, surfaces, prop, disc, discMat, gear, canopy, cockpit, pilot, type: 'prop', spinner, fuselageMat: paint,
+		cockpitCut: [[-0.6, e[1] - 0.72, e[2] - 1.02], [0.6, 3, e[2] + 0.75]] };
 }
 
 function buildJet(cfg) {
@@ -780,12 +800,14 @@ function buildJet(cfg) {
 		root.add(pivot);
 		gear.push({ grp: pivot, wheel: wh, base: wh.position.clone(), strut, retractAxis: i === 0 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, gd.p[0] > 0 ? 1 : -1), retractAngle: i === 0 ? -1.75 : 1.6 });
 	});
-	const cockpit = buildCockpit(cfg.eye, 0.75, 0x2d3034);
+	const cockpit = buildCockpit(cfg.eye, 0.75, 0x2d3034, cfg);
 	cockpit.position.set(0, -0.08, -0.1);
 	const pilot = buildPilot(cfg.eye, 0x4a5240);
 	root.add(cockpit, pilot);
 	finalize(root);
-	return { root, surfaces, gear, canopy, cockpit, pilot, flame, flameMat, type: 'jet' };
+	const e = cfg.eye;
+	return { root, surfaces, gear, canopy, cockpit, pilot, flame, flameMat, type: 'jet', fuselageMat: paint,
+		cockpitCut: [[-0.68, e[1] - 0.8, e[2] - 1.05], [0.68, 3, e[2] + 0.85]] };
 }
 
 // ---------------------------------------------------------------- airliners (737 MAX 8 / A320neo)
@@ -1064,7 +1086,7 @@ function buildAirliner(cfg) {
 		gear.push({ grp: pivot, wheel: wheels, base: wheels.position.clone(), strut, retractAxis: isNose ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, gd.p[0] > 0 ? 1 : -1), retractAngle: isNose ? -1.6 : 1.55 });
 	});
 
-	const cockpit = buildCockpit(cfg.eye, 1.4, 0x2d3034);
+	const cockpit = buildCockpit(cfg.eye, 1.4, 0x2d3034, cfg);
 	cockpit.position.x = cfg.eye[0];
 	const shell = cockpitShell(cfg.eye);
 	cockpit.add(shell);

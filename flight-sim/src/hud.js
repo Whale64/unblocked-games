@@ -57,15 +57,18 @@ export class HUD {
 		const cx = w / 2, cy = h * 0.47;
 		const pxPerDeg = (h / 2) / Math.tan(opts.fov * D2R / 2) * D2R;
 
-		this.drawPitchLadder(t, cx, cy, pxPerDeg, s);
-		this.drawFPV(t, opts, cx, cy, pxPerDeg, s);
-		this.drawHeading(t, cx, 34 * s, s, opts);
-		this.drawSpeedTape(t, cx - Math.min(w * 0.3, 330 * s), cy, s, opts);
-		this.drawAltTape(t, cx + Math.min(w * 0.3, 330 * s), cy, s);
-		this.drawBank(t, cx, cy, s);
+		// in cockpits with real instruments the HUD keeps only systems, warnings and the map
+		if (!opts.minimal) {
+			this.drawPitchLadder(t, cx, cy, pxPerDeg, s);
+			this.drawFPV(t, opts, cx, cy, pxPerDeg, s);
+			this.drawHeading(t, cx, 34 * s, s, opts);
+			this.drawSpeedTape(t, cx - Math.min(w * 0.3, 330 * s), cy, s, opts);
+			this.drawAltTape(t, cx + Math.min(w * 0.3, 330 * s), cy, s);
+			this.drawBank(t, cx, cy, s);
+		}
 		this.drawSystems(t, 18 * s, h - 18 * s, s, opts);
 		this.drawWarnings(t, cx, cy + 150 * s, s, opts);
-		this.drawApproach(t, opts, cx, cy, s);
+		if (!opts.minimal) this.drawApproach(t, opts, cx, cy, s);
 		this.drawMap(t, opts, w - 110 * s, h - 110 * s, 92 * s, s);
 		g.restore();
 		// fps / clock

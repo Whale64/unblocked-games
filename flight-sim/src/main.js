@@ -101,6 +101,7 @@ class Game {
 		renderer.shadowMap.enabled = true;
 		renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 		renderer.autoClear = false;
+		renderer.localClippingEnabled = true;
 
 		this.scene = new THREE.Scene();
 		this.camera = new THREE.PerspectiveCamera(60, 1, 0.25, 140000);
@@ -133,12 +134,12 @@ class Game {
 		await progress(0.55, 'Building airports, lights & hangars…');
 		const parkedCfg = AIRCRAFT.sparrow;
 		this.airports = new Airports(this.scene, () => {
-			const m = buildAircraft(parkedCfg);
+			const m = buildAircraft(parkedCfg, { parked: true });
 			m.disc.visible = false; m.pilot.visible = false;
 			return m.root;
 		}, (i) => {
 			const cfgA = i % 2 ? AIRCRAFT.a320 : AIRCRAFT.b737;
-			const m = buildAircraft(cfgA);
+			const m = buildAircraft(cfgA, { parked: true });
 			m.pilot.visible = false; m.shell.visible = false; m.cockpit.visible = false;
 			return { root: m.root, gearY: -cfgA.gear[1].p[1] - 0.15 };
 		});
@@ -569,6 +570,22 @@ class Game {
 		const inside = this.view === 'cockpit';
 		m.pilot.visible = !inside;
 		if (m.canopy) m.canopy.visible = !inside;
+		// open up the cockpit: clip a box out of the fuselage around the seat so the panel is visible
+		if (m.cockpitCut && m.fuselageMat) {
+			const fmat = m.fuselageMat;
+			if (inside) {
+				if (!this._cutPlanes) this._cutPlanes = Array.from({ length: 6 }, () => new THREE.Plane());
+				const [lo, hi] = m.cockpitCut, P = this._cutPlanes;
+				P[0].set(new THREE.Vector3(-1, 0, 0), lo[0]); P[1].set(new THREE.Vector3(1, 0, 0), -hi[0]);
+				P[2].set(new THREE.Vector3(0, -1, 0), lo[1]); P[3].set(new THREE.Vector3(0, 1, 0), -hi[1]);
+				P[4].set(new THREE.Vector3(0, 0, -1), lo[2]); P[5].set(new THREE.Vector3(0, 0, 1), -hi[2]);
+				m.root.updateMatrixWorld();
+				for (const pl of P) pl.applyMatrix4(m.root.matrixWorld);
+				if (fmat.clippingPlanes !== P) { fmat.clippingPlanes = P; fmat.clipIntersection = true; fmat.side = THREE.DoubleSide; fmat.needsUpdate = true; }
+			} else if (fmat.clippingPlanes && fmat.clippingPlanes.length) {
+				fmat.clippingPlanes = []; fmat.side = THREE.FrontSide; fmat.needsUpdate = true;
+			}
+		}
 		if (m.shell) m.shell.visible = inside;
 	}
 
@@ -857,6 +874,25 @@ class Game {
 		const lightCol = new THREE.Color().copy(this.atm.lightColor).multiplyScalar(this.atm.lightIntensity * Math.max(this.atm.lightDir.y, 0.05) * 0.25 * this.cloudShadow).add(new THREE.Color(0.25, 0.3, 0.38).multiplyScalar(SUN_INTENSITY * 0.05 * sstep(this.atm.sunDir.y, -0.1, 0.3) + 0.01));
 		this.smokeLight = lightCol;
 		this.effects.update(dt, windV, this.camera, this.pxHeight, lightCol);
+		// live avionics: full rate in the cockpit, a trickle otherwise
+		if (this.state === 'flying' && this.model && this.fm && this.model.cockpit.userData.instruments) {
+			const ins = this.model.cockpit.userData.instruments;
+			const tel = this.fm.tel;
+			const hd = tel.heading;
+			this.turnRate = THREE.MathUtils.lerp(this.turnRate || 0, ((((hd - (this.lastHdg ?? hd)) + 540) % 360) - 180) / Math.max(dt, 1e-3), Math.min(1, dt * 3));
+			this.lastHdg = hd;
+			ins.setGain(THREE.MathUtils.clamp(0.75 / this.exposure, 0.04, 8));
+			const { ap, dist } = nearestAirport(this.fm.pos.x, this.fm.pos.z);
+			const wv = this.fm.windBase;
+			ins.update(this.paused ? 0 : dt, tel, {
+				cfg: this.cfg, approach: this.lastApproach, accelAlong: this.accelAlong, pos: this.fm.pos, mapImage: this.mapImage,
+				navText: `${ap.id} ${(dist / 1852).toFixed(1)}NM`, turnRate: this.turnRate, ap: this.autopilot,
+				wind: { dir: (Math.atan2(-wv.x, wv.z) * 180 / Math.PI + 360) % 360, kt: wv.length() * 1.94384 },
+				ndRange: tel.agl > 10000 ? 74000 : tel.agl > 3000 ? 37000 : 18500,
+			}, this.view === 'cockpit');
+			const lev = this.model.cockpit.userData.levers || [];
+			for (const l of lev) l.rotation.x = 0.35 - this.controls.throttle * 0.9;
+		}
 		if (this.model && this.model.cockpit.userData.glow) {
 			const gi = Math.min(0.6, 0.05 / Math.max(this.exposure, 0.05));
 			for (const mat of this.model.cockpit.userData.glow) mat.emissiveIntensity = gi;
@@ -884,7 +920,8 @@ class Game {
 			const velBody = fm.vel.clone().applyQuaternion(fm.quat.clone().invert());
 			this.hud.draw(fm.crashed ? null : tel, {
 				dt, fov: this.camera.fov, cfg: this.cfg, throttle: this.controls.throttle, time: this.time, paused: this.paused,
-				velBody, accelAlong: this.accelAlong, pos: fm.pos, approach: computeApproach(fm.pos, tel.heading),
+				velBody, accelAlong: this.accelAlong, pos: fm.pos, approach: (this.lastApproach = computeApproach(fm.pos, tel.heading)),
+				minimal: this.view === 'cockpit' && (this.cfg.category === 'airliner' || this.cfg.engine === 'prop'),
 				navBearing: brg, navText: `${ap.id} ${String(Math.round(brg)).padStart(3, '0')}° ${(dist / 1852).toFixed(1)} NM`,
 				mapRange: tel.agl > 8000 ? 40000 : 15000, mapImage: this.mapImage, clock,
 			});
