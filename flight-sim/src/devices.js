@@ -25,6 +25,7 @@ export const BUTTON_ACTIONS = [
 	{ id: 'flapsUp', label: 'Flaps up (retract)', key: 'BracketLeft' },
 	{ id: 'brakes', label: 'Wheel brakes (hold)', hold: true },
 	{ id: 'parkBrake', label: 'Parking brake toggle', key: 'DevPark' },
+	{ id: 'reverse', label: 'Thrust reversers toggle', key: 'KeyJ' },
 	{ id: 'airbrakeHold', label: 'Speed brake (hold)', hold: true },
 	{ id: 'trimUp', label: 'Trim nose up (hold)', hold: true },
 	{ id: 'trimDown', label: 'Trim nose down (hold)', hold: true },

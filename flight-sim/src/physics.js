@@ -24,6 +24,14 @@ const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a)
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
 
+// Vertical impact speed (m/s, into the surface) each kind of airframe contact point survives.
+// Below these a contact is a scrape (sparks, friction, maybe damage) instead of a crash.
+const HULL_LIMIT = { tip: 6.5, tail: 5.5, belly: 5.0, nacelle: 4.5, nose: 4.0, prop: 7, top: 3.0 };
+const HULL_REASON = {
+	tip: 'Wing struck the ground', tail: 'Tail struck the ground hard', belly: 'Belly impact',
+	nacelle: 'Engine pod struck the ground', nose: 'Nose-first impact', prop: 'Nose-first impact', top: 'Inverted impact',
+};
+
 const _m = new THREE.Matrix4();
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
@@ -63,6 +71,8 @@ export class FlightModel {
 		this.bankRef = null;
 		this.gammaRef = null;
 		this.nzPath = 1;
+		this.nzS = 1;
+		this.engineFailed = false;
 		this.tel = {};
 		this.stallWarn = 0;
 		this.buffet = 0;
@@ -99,6 +109,8 @@ export class FlightModel {
 		this.engine = throttle; this.ab = 0;
 		this.rpm = this.cfg.engine === 'prop' ? 700 + throttle * 1900 : 0;
 		this.crashed = false; this.crashReason = '';
+		this.engineFailed = false; this.nzS = 1; this._lastScrape = {};
+		this.gearState.forEach((g) => { g.broken = false; g.comp = 0; });
 		this.onGround = onGround;
 		this.airborneTime = onGround ? 0 : 10;
 		this.trim = 0;
@@ -163,20 +175,25 @@ export class FlightModel {
 		const sigma = atm.rho / RHO0;
 		const thr = clamp(ctl.throttle, 0, 1);
 		if (c.engine === 'prop') {
-			this.engine += (thr - this.engine) * Math.min(1, dt / c.spoolTime);
-			const rpmT = 650 + this.engine * 1950 + Math.min(V, 90) * 3.2;
+			this.engine += ((this.engineFailed ? 0 : thr) - this.engine) * Math.min(1, dt / c.spoolTime);
+			const rpmT = this.engineFailed ? 0 : 650 + this.engine * 1950 + Math.min(V, 90) * 3.2;
 			this.rpm += (Math.min(rpmT, 2800) - this.rpm) * Math.min(1, dt / 0.5);
 			const pw = Math.pow(sigma, 1.1);
-			thrust = c.thrustStatic * (0.03 + 0.97 * this.engine) * pw * Math.max(0, 1 - V / c.vZero);
+			thrust = this.engineFailed ? 0 : c.thrustStatic * (0.03 + 0.97 * this.engine) * pw * Math.max(0, 1 - V / c.vZero);
 			if (this.engine < 0.02 && V > 20) thrust -= 0.002 * qbar * c.S; // windmilling drag
 		} else {
-			const target = thr > 0.92 ? 1 : thr / 0.92;
+			const hasAB = c.afterburner !== false;
+			const target = hasAB ? (thr > 0.92 ? 1 : thr / 0.92) : thr;
 			const rate = (target > this.engine ? 1 : 1.6) / c.spoolTime;
 			this.engine += clamp(target - this.engine, -rate * dt, rate * dt);
-			const abT = thr > 0.92 && this.engine > 0.9 ? 1 : 0;
+			const abT = hasAB && thr > 0.92 && this.engine > 0.9 ? 1 : 0;
 			this.ab += (abT - this.ab) * Math.min(1, dt / 0.35);
-			const lapse = Math.pow(sigma, 0.75) * (1 + 0.35 * mach);
-			thrust = (c.thrustDry * (0.05 + 0.95 * this.engine * this.engine) + (c.thrustAB - c.thrustDry) * this.ab) * lapse;
+			// low-bypass turbojets gain thrust with ram pressure; high-bypass turbofans lose it with Mach
+			const lapse = Math.pow(sigma, 0.75) * (1 + (c.ramFactor ?? 0.35) * mach + (c.ramFactor < 0 ? 0.12 * mach * mach : 0));
+			thrust = (c.thrustDry * (0.05 + 0.95 * this.engine * this.engine) + ((c.thrustAB || c.thrustDry) - c.thrustDry) * this.ab) * lapse;
+			// thrust reversers: only with weight on wheels
+			this.reversing = !!(c.reverser && ctl.reverse && this.onGround);
+			if (this.reversing) thrust = -0.45 * thrust;
 			this.rpm = 60 + 40 * this.engine;
 		}
 		this.thrust = thrust;
@@ -190,6 +207,8 @@ export class FlightModel {
 		if (law) {
 			// C*-style load-factor command: neutral stick holds the flight path (bank compensated)
 			const fpa = Math.atan2(this.vel.y, Math.hypot(this.vel.x, this.vel.z));
+			this.omegaPitchEarth = this._fpaPrev === undefined ? 0 : (fpa - this._fpaPrev) / dt;
+			this._fpaPrev = fpa;
 			const bank = Math.atan2(-right.y, up.y);
 			const cphi = Math.cos(bank);
 			const nzBase = Math.cos(fpa) * cphi / Math.max(cphi * cphi, 0.0625);
@@ -200,8 +219,14 @@ export class FlightModel {
 			// outer flight-path-angle hold loop with neutral stick
 			if (Math.abs(inp) < 0.02 && Math.abs(bank) < 1.2) {
 				if (this.gammaRef === null) this.gammaRef = fpa;
-				nzCmd += clamp((this.gammaRef - fpa) * 3.0, -0.6, 0.6);
+				nzCmd += clamp((this.gammaRef - fpa) * (c.lawGamma ?? 3.0) - (c.lawGammaD || 0) * this.omegaPitchEarth, -0.6, 0.6);
 			} else this.gammaRef = null;
+			if (c.pitchProtect) {
+				const theta = Math.asin(clamp(-back.y, -1, 1));
+				const hi = c.pitchProtect[0] * Math.PI / 180, lo = c.pitchProtect[1] * Math.PI / 180;
+				if (theta > hi - 0.05) nzCmd = Math.min(nzCmd, Math.cos(fpa) - (theta - hi + 0.05) * 6);
+				if (theta < lo + 0.05) nzCmd = Math.max(nzCmd, Math.cos(fpa) + (lo + 0.05 - theta) * 6);
+			}
 			nzCmd = clamp(nzCmd, gmin, gmax);
 			const qRef = 0.5 * RHO0 * Math.pow(c.lawV, 2);
 			const sched = clamp(qRef / Math.max(qbar, 1), 0.12, 3);
@@ -216,13 +241,16 @@ export class FlightModel {
 			if (eCmd > eMax) { eCmd = eMax; this.lawI = Math.min(this.lawI, eMax); }
 			if (eCmd < eMin) { eCmd = eMin; this.lawI = Math.max(this.lawI, eMin); }
 			// roll-rate command / bank-angle hold with neutral stick
-			if (Math.abs(ctl.roll) < 0.02 && Math.abs(bank) < 80 * Math.PI / 180) {
+			if (Math.abs(ctl.roll) < 0.02 && Math.abs(bank) < (c.bankProtect ? 70 : 80) * Math.PI / 180) {
 				if (this.bankRef === null) this.bankRef = bank;
+				// bank protection: with the stick released the aircraft returns to at most the hold limit
+				if (c.bankProtect) this.bankRef = clamp(this.bankRef, -c.bankProtect[0] * Math.PI / 180, c.bankProtect[0] * Math.PI / 180);
 				const ss = Math.sqrt(sched);
 				aCmd = clamp(((this.bankRef - bank) * 1.1 - p * 0.35) * ss, -1, 1);
 			} else {
 				this.bankRef = null;
 				if (c.fbw) aCmd -= p * 0.08;
+				if (c.bankProtect && Math.abs(bank) > c.bankProtect[1] * Math.PI / 180 && Math.sign(aCmd) === Math.sign(bank)) aCmd = -Math.sign(bank) * 0.3;
 			}
 			rCmd += -r * (c.fbw ? 1.6 : 0.6) + beta * (c.fbw ? 3.0 : 2.2) + (c.fbw ? 0 : aCmd * 0.12);
 		} else {
@@ -236,7 +264,9 @@ export class FlightModel {
 		this.dr = rateLim(this.dr, clamp(rCmd, -1, 1), 4);
 		this.flap = rateLim(this.flap, this.flapTarget, c.flapRate);
 		if (c.retractable) this.gearPos = rateLim(this.gearPos, this.gearDown ? 1 : 0, 1 / c.gearTime);
-		this.airbrake = rateLim(this.airbrake, clamp(Number(ctl.airbrake) || 0, 0, 1), 1.2);
+		// ground spoilers deploy automatically on the ground with the throttle at idle (landing / rejected take-off)
+		this.groundSpoilers = !!(c.spoilerCL && this.onGround && thr < 0.12 && V > 12);
+		this.airbrake = rateLim(this.airbrake, Math.max(clamp(Number(ctl.airbrake) || 0, 0, 1), this.groundSpoilers ? 1 : 0), c.spoilerCL ? 2.5 : 1.2);
 		// differential toe brakes: left/right main wheels can be braked independently
 		const park = this.parkBrake ? 1 : 0;
 		this.brakeL = Math.max(ctl.brake || 0, ctl.brakeL || 0, park);
@@ -260,6 +290,7 @@ export class FlightModel {
 		const hb = Math.max(agl, 0.3) / c.b;
 		const ge = (16 * hb) * (16 * hb) / (1 + (16 * hb) * (16 * hb));
 		CL *= 1 + 0.08 * (1 - ge);
+		if (c.spoilerCL) CL -= c.spoilerCL * this.airbrake * (this.onGround ? 1 : 0.4);
 		const CDi = c.K * ge * CLlin * CLlin;
 		let wave = 0;
 		if (mach > c.Mcrit) {
@@ -308,52 +339,71 @@ export class FlightModel {
 			.addScaledVector(right, Fb.x).addScaledVector(up, Fb.y).addScaledVector(back, Fb.z);
 		F.y -= c.mass * G;
 
-		// ---- ground contact
+		// ---- ground contact: gear struts + airframe points, forgiving damage model
 		const contactF = (this._cF || (this._cF = new THREE.Vector3())).set(0, 0, 0);
-		let anyContact = false;
-		// skip the per-contact terrain queries entirely when well clear of the ground
-		const nearGround = agl < 14 || this.pos.y < 20;
+		let anyContact = false, inWater = false;
+		const reach = Math.max(c.b * 0.5, 6) + 6;
+		const nearGround = agl < reach || this.pos.y < reach + 5;
 		const gearUsable = this.gearPos > 0.95 && nearGround;
 		const Rinv = _q.copy(this.quat).invert();
+		const T = this._t || (this._t = { rel: new THREE.Vector3(), pw: new THREE.Vector3(), nv: new THREE.Vector3(), vpt: new THREE.Vector3(), w: new THREE.Vector3(), fwd: new THREE.Vector3(), side: new THREE.Vector3(), Fc: new THREE.Vector3(), tq: new THREE.Vector3(), vt: new THREE.Vector3() });
+		const omegaW = T.w.copy(this.omega).applyQuaternion(this.quat);
+		const pointKinematics = (pb) => {
+			T.rel.set(pb[0], pb[1], pb[2]).applyQuaternion(this.quat);
+			T.pw.copy(T.rel).add(this.pos);
+			T.vpt.crossVectors(omegaW, T.rel).add(this.vel);
+		};
+		const applyContact = (F) => {
+			contactF.add(F);
+			Mb.add(T.tq.crossVectors(T.rel, F).applyQuaternion(Rinv));
+		};
+		// water: soft, very draggy contact. A light touch at speed only throws spray.
+		const waterContact = (pen, kind) => {
+			const vInto = -T.vpt.y;
+			const speed = this.vel.length();
+			if (vInto > 3.2 || ((kind === 'nose' || kind === 'prop' || kind === 'top') && speed > 18)) { this.crash('Ditched in the water'); return false; }
+			const kW = c.mass * G / 0.5;
+			const N = Math.max(0, kW * pen + 2 * Math.sqrt(kW * c.mass * 0.2) * vInto);
+			T.Fc.set(-T.vpt.x * c.mass * 0.25, N, -T.vpt.z * c.mass * 0.25);
+			applyContact(T.Fc);
+			inWater = true;
+			if (this.time - (this._lastSpray || -9) > 0.15) { this._lastSpray = this.time; this.events.push({ type: 'spray', p: T.pw.clone(), speed }); }
+			return true;
+		};
 		let tdLogged = false;
 		for (let i = 0; i < c.gear.length; i++) {
 			const g = c.gear[i];
 			const st = this.gearState[i];
 			st.contact = false; st.load = 0;
-			if (!gearUsable) { st.comp = 0; continue; }
-			const pb = new THREE.Vector3(g.p[0], g.p[1], g.p[2]);
-			const pw = pb.clone().applyQuaternion(this.quat).add(this.pos);
-			const hg = getHeight(pw.x, pw.z);
-			const surf = Math.max(hg, 0);
-			const pen0 = surf - pw.y;
+			if (!gearUsable || st.broken) { st.comp = 0; continue; }
+			pointKinematics(g.p);
+			const hg = getHeight(T.pw.x, T.pw.z);
+			const pen0 = Math.max(hg, 0) - T.pw.y;
 			if (pen0 <= 0) { st.comp = Math.max(0, st.comp - dt * 2); continue; }
-			if (hg < 0) { this.crash('Ditched in the water'); return; }
-			const n = getNormal(pw.x, pw.z);
-			const nv = new THREE.Vector3(n.x, n.y, n.z);
+			if (hg < 0) { if (!waterContact(pen0, 'gear')) return; continue; }
+			const n = getNormal(T.pw.x, T.pw.z);
+			const nv = T.nv.set(n.x, n.y, n.z);
 			const pen = pen0 * nv.y;
-			const rel = pb.clone().applyQuaternion(this.quat);
-			const vpt = this.vel.clone().add(new THREE.Vector3().copy(this.omega).applyQuaternion(this.quat).cross(rel));
-			const vn = vpt.dot(nv);
+			const vn = T.vpt.dot(nv);
 			let Fn = this.gearK[i] * pen - this.gearC[i] * vn;
 			if (pen > g.maxC) {
 				Fn += this.gearK[i] * 25 * (pen - g.maxC);
-				if (-vn > 3.8) { this.crash('Landing gear collapsed (hard landing)'); return; }
+				const lim = c.gearCrashVs || 4.5;
+				if (-vn > lim * 1.7) { this.crash('Landing gear collapsed (very hard landing)'); return; }
+				if (-vn > lim) { st.broken = true; st.comp = 0; this.events.push({ type: 'gearcollapse', index: i, p: T.pw.clone() }); continue; }
 			}
 			Fn = Math.max(0, Fn);
 			// tyre forces
-			const steer = g.steer ? clamp(ctl.yaw, -1, 1) * 0.55 * clamp(1 - V / 45, 0.15, 1) : 0;
-			const fwdB = new THREE.Vector3(Math.sin(steer), 0, -Math.cos(steer)).applyQuaternion(this.quat);
+			const steer = g.steer ? clamp(ctl.yaw, -1, 1) * (c.steerMax || 0.55) * clamp(1 - V / 45, 0.15, 1) : 0;
+			const fwdB = T.fwd.set(Math.sin(steer), 0, -Math.cos(steer)).applyQuaternion(this.quat);
 			fwdB.addScaledVector(nv, -fwdB.dot(nv)).normalize();
-			const side = new THREE.Vector3().crossVectors(fwdB, nv).normalize();
-			const vf = vpt.dot(fwdB), vs = vpt.dot(side);
+			const side = T.side.crossVectors(fwdB, nv).normalize();
+			const vf = T.vpt.dot(fwdB), vs = T.vpt.dot(side);
 			const wb = g.p[0] < -0.01 ? this.brakeL : g.p[0] > 0.01 ? this.brakeR : this.brake;
 			const mu = 0.018 + (g.brake ? wb * 0.75 : 0);
 			const Ff = -Math.sign(vf) * mu * Fn * Math.min(1, Math.abs(vf) / 0.35);
 			const Fs = -Math.sign(vs) * 0.85 * Fn * Math.min(1, Math.abs(vs) / 0.2);
-			const Fc = nv.clone().multiplyScalar(Fn).addScaledVector(fwdB, Ff).addScaledVector(side, Fs);
-			contactF.add(Fc);
-			const torqueW = new THREE.Vector3().crossVectors(rel, Fc);
-			Mb.add(torqueW.applyQuaternion(Rinv));
+			applyContact(T.Fc.copy(nv).multiplyScalar(Fn).addScaledVector(fwdB, Ff).addScaledVector(side, Fs));
 			st.contact = true; st.comp = Math.min(pen, g.maxC * 1.2); st.load = Fn;
 			st.wheelRot += vf * dt / g.r;
 			anyContact = true;
@@ -362,28 +412,38 @@ export class FlightModel {
 				this.events.push({ type: 'touchdown', vs: vn, speed: V });
 			}
 		}
-		// hull / airframe contact points
-		for (const hp of (nearGround ? c.hull : [])) {
-			const pb = new THREE.Vector3(hp[0], hp[1], hp[2]);
-			const rel = pb.clone().applyQuaternion(this.quat);
-			const pw = rel.clone().add(this.pos);
-			const hg = getHeight(pw.x, pw.z);
-			const surf = Math.max(hg, 0);
-			const pen = surf - pw.y;
-			if (pen <= 0) continue;
-			const speed = this.vel.length();
-			if (hg < 0 && speed > 2) { this.crash('Ditched in the water'); return; }
-			const vpt = this.vel.clone().add(new THREE.Vector3().copy(this.omega).applyQuaternion(this.quat).cross(rel));
-			const scrape = hp[3] === 1;
-			if (scrape ? (vpt.y < -3.5 || speed > 95) : (speed > 9 || vpt.y < -2.5)) { this.crash(this.gearPos < 0.95 ? 'Gear-up landing' : (scrape ? 'Tail strike' : 'Airframe struck terrain')); return; }
-			if (scrape && speed > 5) this.events.push({ type: 'scrape', p: pw });
-			const Fc = new THREE.Vector3(0, Math.max(0, 200000 * pen - 20000 * vpt.y), 0);
-			const fr = vpt.clone(); fr.y = 0;
-			Fc.addScaledVector(fr, -Math.min(30000, Fc.y * 0.6 / Math.max(fr.length(), 0.3)));
-			contactF.add(Fc);
-			Mb.add(new THREE.Vector3().crossVectors(rel, Fc).applyQuaternion(Rinv));
-			anyContact = true;
+		// airframe points: wingtips, tail, belly, nose, nacelles, prop...
+		if (nearGround) {
+			const kH = c.mass * G / 0.06, cH = 2 * 0.9 * Math.sqrt(kH * c.mass * 0.25);
+			for (const hp of c.hull) {
+				const kind = typeof hp[3] === 'string' ? hp[3] : hp[3] === 1 ? 'tail' : 'belly';
+				pointKinematics(hp);
+				const hg = getHeight(T.pw.x, T.pw.z);
+				const pen = Math.max(hg, 0) - T.pw.y;
+				if (pen <= 0) continue;
+				anyContact = true;
+				if (hg < 0) { if (!waterContact(pen, kind)) return; continue; }
+				const n = getNormal(T.pw.x, T.pw.z);
+				const nv = T.nv.set(n.x, n.y, n.z);
+				const vInto = -T.vpt.dot(nv);
+				if (vInto > HULL_LIMIT[kind] * (c.hullToughness || 1) || pen > 1.5) {
+					this.crash(this.gearPos < 0.95 && kind === 'belly' ? 'Gear-up landing (hit too hard)' : HULL_REASON[kind]);
+					return;
+				}
+				const N = Math.max(0, kH * pen + cH * vInto);
+				const vt = T.vt.copy(T.vpt).addScaledVector(nv, -T.vpt.dot(nv));
+				const sp = vt.length();
+				const fr = sp > 1e-3 ? -Math.min(0.45 * N, sp * c.mass * 3) / sp : 0;
+				applyContact(T.Fc.copy(nv).multiplyScalar(N).addScaledVector(vt, fr));
+				if (kind === 'prop' && !this.engineFailed && c.engine === 'prop') { this.engineFailed = true; this.events.push({ type: 'propstrike', p: T.pw.clone() }); }
+				this._lastScrape = this._lastScrape || {};
+				if (sp > 2 && this.time - (this._lastScrape[kind] || -9) > 0.12) {
+					this._lastScrape[kind] = this.time;
+					this.events.push({ type: 'scrape', kind, p: T.pw.clone(), speed: sp });
+				}
+			}
 		}
+		if (inWater && this.vel.length() < 14) { this.crash('Ditched in the water'); return; }
 		F.add(contactF);
 		this.onGround = anyContact;
 		if (anyContact) this.airborneTime = 0; else this.airborneTime += dt;
@@ -425,8 +485,10 @@ export class FlightModel {
 		this.quat.x += dq.x; this.quat.y += dq.y; this.quat.z += dq.z; this.quat.w += dq.w;
 		this.quat.normalize();
 
-		// structural limits
-		if (!this.onGround && (this.nz > c.gLimit[0] * 1.5 + 0.5 || this.nz < c.gLimit[1] * 1.5 - 0.5)) {
+		// structural limits: aerodynamic load factor only, lightly filtered
+		const nzAero = -Fza / (c.mass * G);
+		this.nzS += (nzAero - this.nzS) * Math.min(1, dt / 0.25);
+		if (this.airborneTime > 0.5 && (this.nzS > c.gLimit[0] * 1.5 + 0.5 || this.nzS < c.gLimit[1] * 1.5 - 0.5)) {
 			this.crash('Structural failure (over-G)');
 			return;
 		}
@@ -475,6 +537,7 @@ export class FlightModel {
 		t.flap = this.flap; t.gearPos = this.gearPos; t.gearDown = this.gearDown;
 		t.brake = this.brake; t.parkBrake = this.parkBrake; t.airbrake = this.airbrake; t.trim = this.trim;
 		t.onGround = this.onGround; t.stall = this.stallWarn; t.buffet = this.buffet;
+		t.reversing = !!this.reversing; t.engineFailed = !!this.engineFailed; t.groundSpoilers = !!this.groundSpoilers;
 		return t;
 	}
 }

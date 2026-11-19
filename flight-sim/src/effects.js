@@ -219,6 +219,7 @@ export class Effects {
 		this.vortexL = new Ribbon(scene, 160, [0.95, 0.97, 1.0], 3);
 		this.vortexR = new Ribbon(scene, 160, [0.95, 0.97, 1.0], 3);
 		this.contrail = new Ribbon(scene, 400, [0.95, 0.96, 1.0], 25);
+		this.contrail2 = new Ribbon(scene, 400, [0.95, 0.96, 1.0], 25);
 		this._v = new THREE.Vector3();
 		this.shake = 0;
 	}
@@ -248,6 +249,23 @@ export class Effects {
 		this.shake = 1.0;
 	}
 
+	sparks(pos, vel, strength) {
+		const v = new THREE.Vector3();
+		for (let i = 0; i < Math.ceil(10 * strength); i++) {
+			v.set((Math.random() - 0.5) * 6, Math.random() * 4, (Math.random() - 0.5) * 6).addScaledVector(vel, 0.6 + Math.random() * 0.3);
+			this.fire.spawn(pos, v, 0.15 + Math.random() * 0.35, 0.25, 0.08, [8, 5, 2], 1, 2.5, -9);
+		}
+		this.tyreSmoke(pos, 0.5 * strength);
+	}
+
+	spray(pos, vel, strength) {
+		const v = new THREE.Vector3();
+		for (let i = 0; i < Math.ceil(14 * strength); i++) {
+			v.set((Math.random() - 0.5) * 5, 2 + Math.random() * 5, (Math.random() - 0.5) * 5).addScaledVector(vel, 0.4);
+			this.smoke.spawn(pos, v, 1 + Math.random() * 1.5, 1, 7, [0.8, 0.85, 0.9], 0.6, 1.0, -9);
+		}
+	}
+
 	tyreSmoke(pos, strength) {
 		const v = new THREE.Vector3();
 		const n = Math.ceil(strength * 6);
@@ -274,11 +292,12 @@ export class Effects {
 		this.vortexL.update(dt, camera.position, wind);
 		this.vortexR.update(dt, camera.position, wind);
 		this.contrail.update(dt, camera.position, wind);
+		this.contrail2.update(dt, camera.position, wind);
 		this.shake = Math.max(0, this.shake - dt * 0.8);
 	}
 
 	clear() {
-		this.smoke.clear(); this.fire.clear(); this.vortexL.clear(); this.vortexR.clear(); this.contrail.clear();
+		this.smoke.clear(); this.fire.clear(); this.vortexL.clear(); this.vortexR.clear(); this.contrail.clear(); this.contrail2.clear();
 		this.burnTime = 0;
 	}
 }

@@ -1,5 +1,6 @@
 // Head-up display & instruments drawn on a 2D canvas overlay.
 import { airports, toRunwayLocal } from './world.js';
+import { flapText } from './aircraft-configs.js';
 
 const GREEN = '#86ffa8';
 const AMBER = '#ffc048';
@@ -298,10 +299,9 @@ export class HUD {
 		this.text(`${Math.round(opts.throttle * 100)}%`, x + 180 * s, yy, 12 * s, GREEN, 'right');
 		yy += L;
 		if (opts.cfg.engine === 'prop') row('RPM', String(Math.round(t.rpm)));
-		else row('N1', `${t.rpm.toFixed(0)}%${t.ab > 0.3 ? '  A/B' : ''}`, t.ab > 0.3 ? AMBER : GREEN);
+		else row('N1', `${t.rpm.toFixed(0)}%${t.ab > 0.3 ? '  A/B' : ''}${t.reversing ? '  REV' : ''}`, t.ab > 0.3 || t.reversing ? AMBER : GREEN);
 		row('THRUST', `${(t.thrust / 1000).toFixed(1)} kN`);
-		const flapDeg = Math.round(t.flap * (opts.cfg.engine === 'prop' ? 30 : 20));
-		row('FLAPS', `${flapDeg}°`, t.flap > 0.01 ? AMBER : GREEN);
+		row('FLAPS', flapText(opts.cfg, t.flap), t.flap > 0.01 ? AMBER : GREEN);
 		// gear
 		this.text('GEAR', x, yy, 12 * s, 'rgba(200,255,215,0.8)', 'left');
 		const gs = t.gearPos;
@@ -310,7 +310,7 @@ export class HUD {
 		g.fillStyle = GREEN;
 		yy += L;
 		row('BRAKES', t.parkBrake ? 'PARK' : t.brake > 0.05 ? 'ON' : 'OFF', t.parkBrake || t.brake > 0.05 ? AMBER : GREEN);
-		if (opts.cfg.engine === 'jet') row('SPD BRK', t.airbrake > 0.05 ? 'EXT' : 'RET', t.airbrake > 0.05 ? AMBER : GREEN);
+		if (opts.cfg.airbrakeCD) row(opts.cfg.spoilerCL ? 'SPOILERS' : 'SPD BRK', t.airbrake > 0.05 ? (t.groundSpoilers ? 'GND' : 'EXT') : 'RET', t.airbrake > 0.05 ? AMBER : GREEN);
 		row('TRIM', `${t.trim >= 0 ? 'UP ' : 'DN '}${Math.abs(Math.round(t.trim * 100))}`);
 	}
 
@@ -322,6 +322,7 @@ export class HUD {
 		else if (t.terrainWarn) list.push(['TERRAIN', AMBER]);
 		if (t.ias > opts.cfg.vne) list.push(['OVERSPEED', RED]);
 		if (t.gearWarn) list.push(['GEAR', RED]);
+		if (t.engineFailed) list.push(['ENGINE FAIL', RED]);
 		if (t.flap > 0.05 && t.ias > opts.cfg.vfe) list.push(['FLAP OVERSPEED', AMBER]);
 		if (Math.abs(t.bank) > 50 && t.agl < 1500 && !t.onGround) list.push(['BANK ANGLE', AMBER]);
 		if (opts.paused) list.push(['PAUSED', '#ffffff']);

@@ -98,7 +98,8 @@ void main() {
 }`;
 
 export class Airports {
-	constructor(scene, buildParked) {
+	constructor(scene, buildParked, buildAirliner) {
+		this.buildAirliner = buildAirliner;
 		this.scene = scene;
 		this.group = new THREE.Group();
 		scene.add(this.group);
@@ -264,6 +265,16 @@ export class Airports {
 			this.group.add(sock);
 			this.windsocks.push(sock);
 			add(base.clone().add(new THREE.Vector3(0, 7.3, 0)), red, 1.2);
+		}
+		// airliners parked at the terminal stands, nose-in
+		if (ap.main && this.buildAirliner) {
+			for (let i = 0; i < 2; i++) {
+				const pk = this.buildAirliner(i);
+				const p = P(-70 + i * 75, 300, 0);
+				pk.root.position.set(p.x, E + pk.gearY, p.z);
+				pk.root.rotation.y = -Math.PI / 2 - ap.hdRad;
+				this.group.add(pk.root);
+			}
 		}
 		// parked aircraft on the apron
 		if (buildParked) {

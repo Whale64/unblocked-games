@@ -6,7 +6,7 @@ import { createCloudTextures, sampleCoverageCPU } from './clouds.js';
 import { PostFX } from './postfx.js';
 import { Terrain } from './terrain.js';
 import { Airports } from './airport.js';
-import { AIRCRAFT } from './aircraft-configs.js';
+import { AIRCRAFT, flapText } from './aircraft-configs.js';
 import { buildAircraft, setSurface } from './aircraft-model.js';
 import { FlightModel } from './physics.js';
 import { Controls } from './controls.js';
@@ -39,6 +39,7 @@ const SPAWNS = {
 	mountainApp: { label: 'Approach · Ridgeback Valley', kind: 'approach', ap: 1 },
 };
 const VIEWS = ['chase', 'cockpit', 'orbit', 'flyby', 'tower'];
+
 
 const $ = (id) => document.getElementById(id);
 const sstep = THREE.MathUtils.smoothstep;
@@ -129,6 +130,11 @@ class Game {
 			const m = buildAircraft(parkedCfg);
 			m.disc.visible = false; m.pilot.visible = false;
 			return m.root;
+		}, (i) => {
+			const cfgA = i % 2 ? AIRCRAFT.a320 : AIRCRAFT.b737;
+			const m = buildAircraft(cfgA);
+			m.pilot.visible = false; m.shell.visible = false; m.cockpit.visible = false;
+			return { root: m.root, gearY: -cfgA.gear[1].p[1] - 0.15 };
 		});
 		this.patchLighting(this.airports.group);
 
@@ -331,6 +337,7 @@ class Game {
 		this.crashTimer = 0;
 		this.fade = 1;
 		this.landingInfo = null;
+		this.reverse = false;
 		this.accum = 0;
 		this.prevVel = this.fm.vel.clone();
 		$('menu').classList.add('hidden');
@@ -389,12 +396,16 @@ class Game {
 		}
 		const det = cfg.flapDetents;
 		const idx = det.reduce((bi, d, i) => (Math.abs(d - fm.flapTarget) < Math.abs(det[bi] - fm.flapTarget) ? i : bi), 0);
-		if (c.hit('BracketRight') || c.hit('KeyX')) { fm.flapTarget = det[Math.min(det.length - 1, idx + 1)]; this.hud.toast(`Flaps ${Math.round(fm.flapTarget * (cfg.engine === 'prop' ? 30 : 20))}°`, '#fff', 1.4); this.audio.oneShot('click'); }
-		if (c.hit('BracketLeft') || c.hit('KeyZ')) { fm.flapTarget = det[Math.max(0, idx - 1)]; this.hud.toast(`Flaps ${Math.round(fm.flapTarget * (cfg.engine === 'prop' ? 30 : 20))}°`, '#fff', 1.4); this.audio.oneShot('click'); }
+		if (c.hit('BracketRight') || c.hit('KeyX')) { fm.flapTarget = det[Math.min(det.length - 1, idx + 1)]; this.hud.toast(`Flaps ${flapText(cfg, fm.flapTarget)}`, '#fff', 1.4); this.audio.oneShot('click'); }
+		if (c.hit('BracketLeft') || c.hit('KeyZ')) { fm.flapTarget = det[Math.max(0, idx - 1)]; this.hud.toast(`Flaps ${flapText(cfg, fm.flapTarget)}`, '#fff', 1.4); this.audio.oneShot('click'); }
 		if ((c.hit('KeyB') && c.shift()) || c.hit('DevPark')) { fm.parkBrake = !fm.parkBrake; this.hud.toast(fm.parkBrake ? 'Parking brake SET' : 'Parking brake released', '#ffc048'); }
 		if (c.hit('KeyM')) { c.mouseYoke = !c.mouseYoke; this.settings.mouseYoke = c.mouseYoke; this.hud.toast(c.mouseYoke ? 'Mouse yoke ON' : 'Mouse yoke OFF', '#fff'); }
 		if (c.hit('KeyT')) { this.clockHour = (this.clockHour + (c.shift() ? -0.5 : 0.5) + 24) % 24; this.atm.setTime(this.clockHour); }
 		if (c.hit('KeyK')) { this.settings.assist = !this.settings.assist; this.hud.toast(this.settings.assist ? 'Flight assist ON (path & bank hold)' : 'Flight assist OFF (raw controls)', '#fff', 2); }
+		if (c.hit('KeyJ') && cfg.reverser) {
+			this.reverse = !this.reverse;
+			this.hud.toast(this.reverse ? 'Thrust reversers ARMED (active on the ground)' : 'Reversers stowed', '#ffc048', 2);
+		}
 		if (c.hit('KeyN')) { this.audio.enabled = !this.audio.enabled; this.hud.toast(this.audio.enabled ? 'Sound on' : 'Sound muted', '#fff'); }
 		const trimRate = 0.25;
 		if (c.down('Comma', 'Home', 'Dev_trimDown')) fm.trim = Math.max(-1, fm.trim - trimRate * this.dt);
@@ -403,7 +414,7 @@ class Game {
 		if (c.trimLever.changed) fm.trim = c.trimLever.value;
 		if (c.flapsLever.changed) {
 			const target = det.reduce((best, d) => (Math.abs(d - c.flapsLever.value) < Math.abs(best - c.flapsLever.value) ? d : best), det[0]);
-			if (target !== fm.flapTarget) { fm.flapTarget = target; this.hud.toast(`Flaps ${Math.round(target * (cfg.engine === 'prop' ? 30 : 20))}°`, '#fff', 1.4); }
+			if (target !== fm.flapTarget) { fm.flapTarget = target; this.hud.toast(`Flaps ${flapText(cfg, target)}`, '#fff', 1.4); }
 		}
 		if (c.hit('DevRecenter')) { this.cam.headYaw = this.cam.headPitch = 0; this.cam.yaw = this.cam.pitch = 0; }
 	}
@@ -418,6 +429,7 @@ class Game {
 			pitch: c.axes.pitch, roll: c.axes.roll, yaw: c.axes.yaw, throttle: c.throttle,
 			brake: c.down('Space', 'KeyB', 'Dev_brakes') && !c.shift() ? 1 : 0,
 			brakeL: c.brakeL, brakeR: c.brakeR,
+			reverse: !!this.reverse,
 			airbrake: Math.max(c.down('KeyY', 'Slash', 'Dev_airbrakeHold') ? 1 : 0, c.airbrakeLever.bound ? c.airbrakeLever.value : 0),
 			assist: this.settings.assist,
 		};
@@ -458,7 +470,19 @@ class Game {
 			const t = fm.telemetry();
 			$('crash-stats').textContent = `${Math.round(t.ias)} kt · ${Math.round(t.vs)} fpm · max ${t.maxG.toFixed(1)} G`;
 		} else if (e.type === 'scrape') {
-			if (Math.random() < 0.3) this.effects.tyreSmoke(e.p, 0.6);
+			this.effects.sparks(e.p, fm.vel, Math.min(1.5, e.speed / 30));
+			const msg = { tip: 'Wingtip strike!', tail: 'Tail strike!', belly: 'Belly scrape!', nacelle: 'Engine pod strike!', nose: 'Nose scrape!', prop: 'Prop strike!', top: 'Airframe scrape!' }[e.kind];
+			if (msg && this.time - (this.lastScrapeMsg || -9) > 2.5) { this.lastScrapeMsg = this.time; this.hud.toast(msg, '#ffb347', 2); this.audio.oneShot('thunk'); }
+			this.cam.shake = Math.max(this.cam.shake, 0.25);
+		} else if (e.type === 'propstrike') {
+			this.hud.toast('Prop strike: engine failed. Glide it in!', '#ff6b4a', 4);
+		} else if (e.type === 'gearcollapse') {
+			this.hud.toast('Landing gear collapsed!', '#ff6b4a', 3.5);
+			this.effects.sparks(e.p, fm.vel, 1.5);
+			this.audio.oneShot('thunk');
+			this.cam.shake = 1;
+		} else if (e.type === 'spray') {
+			this.effects.spray(e.p, fm.vel, Math.min(1.5, e.speed / 30));
 		}
 	}
 
@@ -472,7 +496,7 @@ class Game {
 		setSurface(s.ailL, fm.da * cfg.daMax);
 		setSurface(s.elevR, -fm.de * cfg.deMax);
 		setSurface(s.elevL, -fm.de * cfg.deMax);
-		const flapA = fm.flap * (cfg.engine === 'prop' ? 30 : 20) * Math.PI / 180;
+		const flapA = fm.flap * (cfg.flapMaxDeg || (m.type === 'airliner' ? 40 : 30)) * Math.PI / 180;
 		setSurface(s.flapR, flapA); setSurface(s.flapL, flapA);
 		setSurface(s.rudder, fm.dr * cfg.drMax);
 		if (s.airbrake) s.airbrake.rotation.x = -fm.airbrake * 0.95;
@@ -483,7 +507,16 @@ class Game {
 		const beacon = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 0.9);
 		s.beacon.material.color.setRGB(1, 0.08, 0.04).multiplyScalar(Math.pow(beacon, 6) * 30);
 		// propeller / jet exhaust
-		if (m.type === 'prop') {
+		if (m.type === 'airliner') {
+			const slat = fm.flap > 0.01 ? -0.32 : 0;
+			setSurface(s.slatR, slat); setSurface(s.slatL, slat);
+			// spoilers: speed brake / ground spoilers, plus roll spoilers on the down-going wing
+			const roll = Math.max(0, fm.da) * 0.5, rollL = Math.max(0, -fm.da) * 0.5;
+			setSurface(s.spoilR, -Math.min(1, fm.airbrake + roll) * 0.9);
+			setSurface(s.spoilL, -Math.min(1, fm.airbrake + rollL) * 0.9);
+			const spin = (0.25 + fm.engine) * 60 * dt;
+			s.fanR.rotation.z -= spin; s.fanL.rotation.z += spin;
+		} else if (m.type === 'prop') {
 			m.prop.rotation.z -= fm.rpm / 60 * Math.PI * 2 * dt;
 			const blur = sstep(fm.rpm, 500, 1100);
 			m.discMat.uniforms.uAlpha.value = blur * (this.view === 'cockpit' ? 0.35 : 1);
@@ -500,6 +533,7 @@ class Game {
 		// gear
 		m.gear.forEach((g, i) => {
 			const st = fm.gearState[i];
+			if (st.broken) { g.grp.visible = false; return; }
 			if (cfg.retractable) {
 				const a = (1 - fm.gearPos) * g.retractAngle;
 				g.grp.quaternion.setFromAxisAngle(g.retractAxis, a);
@@ -515,7 +549,8 @@ class Game {
 		if (m.cockpit.userData.stick) m.cockpit.userData.stick.rotation.set(fm.de * 0.3, 0, -fm.da * 0.3);
 		const inside = this.view === 'cockpit';
 		m.pilot.visible = !inside;
-		m.canopy.visible = !inside;
+		if (m.canopy) m.canopy.visible = !inside;
+		if (m.shell) m.shell.visible = inside;
 	}
 
 	updateEffects(dt, tel) {
@@ -540,9 +575,12 @@ class Game {
 			}
 		}
 		// contrail at high altitude for the jet
-		if (cfg.engine === 'jet' && fm.pos.y > 7800) {
+		if (cfg.engine === 'jet' && fm.pos.y > 7800 && cfg.engines) {
 			const a = sstep(fm.pos.y, 7800, 9000) * (0.3 + fm.engine * 0.5);
-			this.effects.contrail.add(new THREE.Vector3(0, 0.04, 14).applyQuaternion(R).add(fm.pos), a, 2.5, 50);
+			cfg.engines.forEach((e, i) => {
+				const trail = i === 0 ? this.effects.contrail : this.effects.contrail2;
+				trail.add(new THREE.Vector3(e[0], e[1], e[2] + 12).applyQuaternion(R).add(fm.pos), a, 2.5, 50);
+			});
 		}
 		// dust/spray when rolling fast on grass or touching water spray
 		if (fm.onGround && tel.gs > 25) {
@@ -677,10 +715,12 @@ class Game {
 		this.cloudShadow = cs;
 		this.sun.color.copy(atm.lightColor);
 		this.sun.intensity = atm.lightIntensity; // cloud & terrain shadows are applied per pixel
-		const sr = this.cfg && this.cfg.engine === 'jet' ? 55 : 40;
+		const sr = this.cfg ? (this.cfg.shadowSize || (this.cfg.engine === 'jet' ? 55 : 40)) : 40;
 		this.sun.shadow.camera.left = -sr; this.sun.shadow.camera.right = sr;
 		this.sun.shadow.camera.top = sr; this.sun.shadow.camera.bottom = -sr;
-		this.sun.shadow.camera.near = 1; this.sun.shadow.camera.far = 1200;
+		// generous depth range: under reversed-Z three.js treats receivers beyond the far plane as shadowed,
+		// which showed up as a dark square under the aircraft when flying high
+		this.sun.shadow.camera.near = 1; this.sun.shadow.camera.far = 40000;
 		this.sun.shadow.camera.updateProjectionMatrix();
 		// snap the shadow frustum to whole shadow-map texels so shadow edges don't swim/flicker as we move
 		const L = atm.lightDir;
@@ -713,7 +753,8 @@ class Game {
 		if (this.fm && this.model && this.state !== 'menu') {
 			const on = atm.night > 0.25 && !this.fm.crashed;
 			this.landingLight.intensity = on ? 9000 : 0;
-			const lp = new THREE.Vector3(0, -0.5, this.cfg.engine === 'jet' ? -5.5 : -2.6).applyQuaternion(this.fm.quat).add(this.fm.pos);
+			const ll = this.cfg.landingLight || [0, -0.5, this.cfg.engine === 'jet' ? -5.5 : -2.6];
+			const lp = new THREE.Vector3(...ll).applyQuaternion(this.fm.quat).add(this.fm.pos);
 			this.landingLight.position.copy(lp);
 			this.landingLight.target.position.copy(new THREE.Vector3(0, -0.12, -1).applyQuaternion(this.fm.quat).multiplyScalar(100).add(lp));
 			this.landingLight.target.updateMatrixWorld();
