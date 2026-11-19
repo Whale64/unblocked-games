@@ -114,11 +114,48 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 .cap-state { font-size: 12px; color: var(--warn); margin-bottom: 4px; }
 .cap-state.go { color: var(--accent2); }
 .cap-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* autopilot flight control unit */
+#fcu { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 4px; user-select: none; -webkit-user-select: none; }
+#fcu.hidden { display: none; }
+#fcu-fma { display: flex; gap: 2px; font: 700 12px ui-monospace, Menlo, monospace; letter-spacing: .06em; }
+#fcu-fma span { min-width: 74px; text-align: center; padding: 2px 6px; background: rgba(4,8,12,0.72); color: #45ff8a; border-radius: 3px; }
+#fcu-fma span.arm { color: #6ad8ff; }
+#fcu-fma span:empty { display: none; }
+#fcu-row { display: flex; gap: 6px; padding: 6px 8px; background: rgba(8,14,22,0.78); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 6px 24px rgba(0,0,0,0.35); }
+.fcu-f { display: flex; flex-direction: column; align-items: center; cursor: ns-resize; padding: 1px 4px; border-radius: 6px; }
+.fcu-f:hover { background: rgba(255,255,255,0.06); }
+.fcu-f label { font-size: 9px; letter-spacing: .2em; color: #8fa4b8; cursor: inherit; }
+.fcu-f .v { font: 700 17px ui-monospace, Menlo, monospace; color: #ffb547; background: #05080b; border-radius: 4px; padding: 2px 6px; min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
+.fcu-f.off .v { color: #6b7a88; }
+.fcu-f .ar { display: flex; gap: 2px; margin-top: 2px; }
+.fcu-f .ar b { font-size: 10px; width: 24px; text-align: center; background: rgba(255,255,255,0.07); border-radius: 3px; cursor: pointer; color: #cfe; line-height: 15px; }
+.fcu-f .ar b:hover { background: rgba(255,255,255,0.18); }
+.fcu-b { font: 700 11px Inter, system-ui, sans-serif; letter-spacing: .08em; align-self: center; padding: 9px 9px 7px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05); color: #cfdceb; cursor: pointer; position: relative; }
+.fcu-b::after { content: ''; position: absolute; left: 30%; right: 30%; top: 3px; height: 2px; border-radius: 1px; background: #33414e; }
+.fcu-b.on::after { background: #45ff8a; box-shadow: 0 0 6px #45ff8a; }
+.fcu-b.arm::after { background: #6ad8ff; box-shadow: 0 0 6px #6ad8ff; }
+.fcu-b:hover { background: rgba(255,255,255,0.12); }
+.fcu-sep { width: 1px; background: rgba(255,255,255,0.12); margin: 2px 2px; }
+@media (max-width: 700px) { #fcu { transform: translateX(-50%) scale(0.78); transform-origin: 50% 100%; bottom: 4px; } }
 </style>
 </head>
 <body>
 <canvas id="gl"></canvas>
 <canvas id="hud"></canvas>
+<div id="fcu" class="hidden">
+	<div id="fcu-fma"><span id="fma-spd"></span><span id="fma-lat"></span><span id="fma-vert"></span><span id="fma-ap"></span></div>
+	<div id="fcu-row">
+		<div class="fcu-f" data-f="spd"><label>SPD</label><div class="v" id="fcu-spd">---</div><div class="ar"><b data-d="-1">&#9660;</b><b data-d="1">&#9650;</b></div></div>
+		<div class="fcu-f" data-f="hdg"><label>HDG</label><div class="v" id="fcu-hdg">---</div><div class="ar"><b data-d="-1">&#9664;</b><b data-d="1">&#9654;</b></div></div>
+		<div class="fcu-f" data-f="alt"><label>ALT</label><div class="v" id="fcu-alt">-----</div><div class="ar"><b data-d="-1">&#9660;</b><b data-d="1">&#9650;</b></div></div>
+		<div class="fcu-f" data-f="vs"><label>V/S</label><div class="v" id="fcu-vs">----</div><div class="ar"><b data-d="-1">&#9660;</b><b data-d="1">&#9650;</b></div></div>
+		<div class="fcu-sep"></div>
+		<button class="fcu-b" id="fcu-ap" title="Autopilot (U)">AP</button>
+		<button class="fcu-b" id="fcu-athr" title="Autothrottle (Shift+U)">A/THR</button>
+		<button class="fcu-b" id="fcu-app" title="Approach: localizer + glideslope to autoland (O)">APP</button>
+	</div>
+</div>
 
 <div id="loading" class="overlay">
 	<div class="logo">SKYWARD</div>
@@ -213,6 +250,9 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 			<div><span>Speed brake (jet)</span><span><kbd>Y</kbd> (hold)</span></div>
 			<div><span>Pitch trim</span><span><kbd>,</kbd> <kbd>.</kbd></span></div>
 			<div><span>Fine control</span><span>hold <kbd>Alt</kbd></span></div>
+			<div><span>Autopilot on / off</span><span><kbd>U</kbd> · <kbd>Shift</kbd>+<kbd>U</kbd> autothrottle</span></div>
+			<div><span>Approach / autoland</span><span><kbd>O</kbd> (arm near an airport)</span></div>
+			<div><span>Autopilot panel</span><span><kbd>L</kbd> show/hide · wheel or arrows to set</span></div>
 			<div><span>Flight assist toggle</span><span><kbd>K</kbd></span></div>
 			<div><span>Cycle camera</span><span><kbd>C</kbd> · <kbd>V</kbd> cockpit · <kbd>F1</kbd>–<kbd>F5</kbd></span></div>
 			<div><span>Look around / orbit</span><span>drag mouse · wheel zoom</span></div>

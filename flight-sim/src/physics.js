@@ -217,7 +217,7 @@ export class FlightModel {
 			const inp = clamp(ctl.pitch, -1, 1);
 			let nzCmd = nzBase + (inp > 0 ? inp * (gmax - nzBase) : inp * (nzBase - gmin));
 			// outer flight-path-angle hold loop with neutral stick
-			if (Math.abs(inp) < 0.02 && Math.abs(bank) < 1.2) {
+			if (Math.abs(inp) < 0.02 && Math.abs(bank) < 1.2 && !ctl.ap) {
 				if (this.gammaRef === null) this.gammaRef = fpa;
 				nzCmd += clamp((this.gammaRef - fpa) * (c.lawGamma ?? 3.0) - (c.lawGammaD || 0) * this.omegaPitchEarth, -0.6, 0.6);
 			} else this.gammaRef = null;
@@ -241,7 +241,7 @@ export class FlightModel {
 			if (eCmd > eMax) { eCmd = eMax; this.lawI = Math.min(this.lawI, eMax); }
 			if (eCmd < eMin) { eCmd = eMin; this.lawI = Math.max(this.lawI, eMin); }
 			// roll-rate command / bank-angle hold with neutral stick
-			if (Math.abs(ctl.roll) < 0.02 && Math.abs(bank) < (c.bankProtect ? 70 : 80) * Math.PI / 180) {
+			if (Math.abs(ctl.roll) < 0.02 && !ctl.ap && Math.abs(bank) < (c.bankProtect ? 70 : 80) * Math.PI / 180) {
 				if (this.bankRef === null) this.bankRef = bank;
 				// bank protection: with the stick released the aircraft returns to at most the hold limit
 				if (c.bankProtect) this.bankRef = clamp(this.bankRef, -c.bankProtect[0] * Math.PI / 180, c.bankProtect[0] * Math.PI / 180);
@@ -309,7 +309,7 @@ export class FlightModel {
 
 		let Cl = c.Clb * beta + c.Clp * (1 - 1.3 * sf) * ph + c.Clr * rh + c.Clda * this.da * c.daMax * ctrlEff + c.Cldr * this.dr * c.drMax;
 		// stall wing-drop asymmetry
-		Cl += sf * (0.03 * Math.sin(this.time * 1.7 + 1.3) + 0.15 * beta) + this.gustRoll * c.Clda * c.daMax * 4;
+		Cl += sf * (0.03 * Math.sin(this.time * 1.7 + 1.3) + 0.15 * beta) + this.gustRoll * c.Clda * c.daMax * 4 * (this.onGround ? 0.08 : Math.min(1, 0.25 + agl / 30));
 		let Cm = c.Cm0 + c.Cma * alpha + c.Cmq * qh + c.flapCm * fl - 0.18 * sf * Math.sign(alpha) - 0.02 * this.airbrake;
 		let CmCtl = c.Cmde * this.de * c.deMax * (1 - 0.3 * sf);
 		let Cn = c.Cnb * beta + c.Cnp * ph + c.Cnr * (1 - 0.5 * sf) * rh + c.Cnda * this.da * c.daMax;
@@ -402,7 +402,9 @@ export class FlightModel {
 			const wb = g.p[0] < -0.01 ? this.brakeL : g.p[0] > 0.01 ? this.brakeR : this.brake;
 			const mu = 0.018 + (g.brake ? wb * 0.75 : 0);
 			const Ff = -Math.sign(vf) * mu * Fn * Math.min(1, Math.abs(vf) / 0.35);
-			const Fs = -Math.sign(vs) * 0.85 * Fn * Math.min(1, Math.abs(vs) / 0.2);
+			// tyre cornering force builds with slip angle and saturates around 7 deg (not instantly)
+			const slip = Math.atan2(vs, Math.max(Math.abs(vf), 2));
+			const Fs = -0.85 * Fn * clamp(slip / 0.12, -1, 1);
 			applyContact(T.Fc.copy(nv).multiplyScalar(Fn).addScaledVector(fwdB, Ff).addScaledVector(side, Fs));
 			st.contact = true; st.comp = Math.min(pen, g.maxC * 1.2); st.load = Fn;
 			st.wheelRot += vf * dt / g.r;

@@ -50,6 +50,15 @@ It needs no server, no install and no network access, so it works offline, from 
 - GPWS-style warnings: PULL UP, TERRAIN, GEAR, BANK ANGLE and STALL, with voice callouts. Radio-altitude callouts are spoken on approach.
 - Landing rating based on touchdown vertical speed.
 
+### Autopilot and autothrottle
+- **Flight control panel** at the bottom of the screen: set SPD, HDG, ALT and V/S with the arrows or the mouse wheel (hold `Shift` for big steps), and switch AP, A/THR and APP on or off. Values you preselect before engaging are used when you engage.
+- **Lateral modes**: HDG (heading select) and LOC. LOC flies a ground-track loop, so it corrects for crosswind.
+- **Vertical modes**: ALT hold, V/S climb or descent to the selected altitude, and G/S. A stall guard stops the autopilot from trading away too much speed.
+- **Autothrottle**: a PI speed controller. It retards to idle in the flare.
+- **Autoland**: press `O` near an airport to arm APP. The autopilot captures the localizer and glideslope, then flies FLARE, de-crabs, RETARDs and runs ROLLOUT with centreline tracking and autobrake. It switches off at taxi speed.
+- **Flight-mode annunciator** above the panel and on the airliner PFD.
+- **Disconnects**: a firm stick input disconnects the autopilot, and moving the thrust levers disconnects the autothrottle.
+
 ### Audio
 Sound is synthesised live with WebAudio:
 - Piston-engine firing pulses and the propeller.
@@ -85,6 +94,9 @@ Sound is synthesised live with WebAudio:
 | Trim | `,` `.` |
 | Camera | `C` cycle, `V` cockpit, `F1` to `F5`; drag the mouse to look, scroll to zoom |
 | Mouse yoke | `M` |
+| Autopilot / autothrottle | `U` / `Shift`+`U` |
+| Approach / autoland | `O` |
+| Autopilot panel show/hide | `L` |
 | Flight assist on/off | `K` |
 | Time of day | `T` / `Shift`+`T` |
 | HUD | `I` |

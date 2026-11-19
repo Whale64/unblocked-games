@@ -18,6 +18,7 @@ import { HeightField, patchWorldLighting } from './worldlight.js';
 import { DevicesUI } from './devices-ui.js';
 import { initSettlements, towns, roads } from './settlements.js';
 import { CityLife } from './citylife.js';
+import { Autopilot } from './autopilot.js';
 
 const QUALITY = {
 	low: { pixelRatio: 0.75, msaa: 0, cloudScale: 0.35, cloudSteps: 20, bloom: false, godRays: false, shadows: 0, terrainN: 24, terrainSplit: 1.6, terrainMaxLevel: 6, treeRadius: 1500, treeNear: 450, treeDensity: 0.5, treeShadows: false, texSize: 256, cityRange: 8000, traffic: 0.4 },
@@ -303,6 +304,7 @@ class Game {
 		$('crash-menu').onclick = () => this.toMenu();
 		$('help-btn').onclick = () => $('help').classList.toggle('hidden');
 		$('help-close').onclick = () => $('help').classList.add('hidden');
+		this.initFCU();
 		this.devicesUI = new DevicesUI(this.controls.devices, $('devices'));
 		$('devices-btn').onclick = () => this.devicesUI.open();
 		$('pause-devices').onclick = () => this.devicesUI.open();
@@ -357,6 +359,9 @@ class Game {
 		this.fade = 1;
 		this.landingInfo = null;
 		this.reverse = false;
+		this.autopilot.reset();
+		this.athrSet = null;
+		$('fcu').classList.toggle('hidden', s.fcu === false);
 		this.accum = 0;
 		this.prevVel = this.fm.vel.clone();
 		$('menu').classList.add('hidden');
@@ -368,6 +373,8 @@ class Game {
 		this.hud.toasts = [];
 		this.hud.toast(`${cfg.name} · ${sp.label.replace('10', String(airports[sp.ap].numA).padStart(2, '0'))}`, '#cfe8ff', 4);
 		if (sp.kind === 'runway') this.hud.toast('Throttle up (Shift / R), rotate at ' + cfg.vr + ' kt (S / ↓)', '#ffffff', 6);
+		else if (sp.kind === 'approach') this.hud.toast('Fly it by hand, or press O for a full autoland', '#ffffff', 6);
+		else this.hud.toast('U engages the autopilot · set SPD / HDG / ALT on the panel below', '#ffffff', 6);
 		// pre-stream terrain at the spawn and compile every shader variant up front (avoids first-use hitches)
 		this.terrain.update(this.fm.pos, 1e9, true);
 		this.city.update(0, this.fm.pos, 0, this.atm.night, this.camera, this.pxHeight, true);
@@ -388,6 +395,7 @@ class Game {
 		$('pause').classList.add('hidden');
 		$('crash').classList.add('hidden');
 		$('menu').classList.remove('hidden');
+		$('fcu').classList.add('hidden');
 		if (this.model) { this.scene.remove(this.model.root); this.model = null; }
 		if (this.audio.ctx) this.audio.ctx.suspend();
 	}
@@ -426,6 +434,9 @@ class Game {
 			this.reverse = !this.reverse;
 			this.hud.toast(this.reverse ? 'Thrust reversers ARMED (active on the ground)' : 'Reversers stowed', '#ffc048', 2);
 		}
+		if (c.hit('KeyU')) { if (c.shift()) this.toggleAthr(); else this.toggleAP(); }
+		if (c.hit('KeyO')) this.toggleApproach();
+		if (c.hit('KeyL')) { const el = $('fcu'); el.classList.toggle('hidden'); this.settings.fcu = !el.classList.contains('hidden'); saveSettings(this.settings); }
 		if (c.hit('KeyN')) { this.audio.enabled = !this.audio.enabled; this.hud.toast(this.audio.enabled ? 'Sound on' : 'Sound muted', '#fff'); }
 		const trimRate = 0.25;
 		if (c.down('Comma', 'Home', 'Dev_trimDown')) fm.trim = Math.max(-1, fm.trim - trimRate * this.dt);
@@ -437,6 +448,103 @@ class Game {
 			if (target !== fm.flapTarget) { fm.flapTarget = target; this.hud.toast(`Flaps ${flapText(cfg, target)}`, '#fff', 1.4); }
 		}
 		if (c.hit('DevRecenter')) { this.cam.headYaw = this.cam.headPitch = 0; this.cam.yaw = this.cam.pitch = 0; }
+	}
+
+	// ------------------------------------------------------------------ autopilot
+	toggleAP() {
+		const ap = this.autopilot, fm = this.fm;
+		if (ap.engaged) { ap.disengage('Autopilot OFF'); this.flushAPMessage(); return; }
+		if (fm.onGround || fm.tel.agl < 150 || fm.crashed) { this.hud.toast('Autopilot needs to be airborne (above 150 ft)', '#ffc048', 2); return; }
+		ap.engage(fm, this.cfg, this.controls.throttle);
+		this.athrSet = ap.thrCmd;
+		this.hud.toast('Autopilot ON · A/THR', '#45ff8a', 1.8);
+		this.audio.oneShot('click');
+	}
+
+	toggleAthr() {
+		const ap = this.autopilot;
+		if (ap.athr) { ap.disengageAthr(); this.hud.toast('A/THR OFF', '#ffc048', 1.8); }
+		else { ap.engageAthr(this.fm, this.cfg, this.controls.throttle); this.athrSet = ap.thrCmd; this.hud.toast(`A/THR ON · SPEED ${ap.spdTarget}`, '#45ff8a', 1.8); }
+		this.audio.oneShot('click');
+	}
+
+	toggleApproach() {
+		const ap = this.autopilot;
+		if (ap.appArmed) { ap.appArmed = false; ap.locCap = ap.gsCap = false; ap.rwy = null; if (ap.vert === 'G/S' || ap.vert === 'FLARE') ap.vert = 'ALT'; this.hud.toast('Approach mode off', '#ffc048', 1.6); return; }
+		if (!ap.engaged) this.toggleAP();
+		if (!ap.engaged) return;
+		ap.armApproach();
+		ap.altTarget = Math.max(ap.altTarget, 0);
+		this.hud.toast('APP armed: intercept the localizer (within ±45°), autoland follows', '#6ad8ff', 3);
+		this.audio.oneShot('click');
+	}
+
+	flushAPMessage() {
+		const ap = this.autopilot;
+		if (!ap.msg) return;
+		const off = /off|disconnect/i.test(ap.msg);
+		this.hud.toast(ap.msg, off ? '#ffc048' : '#6ad8ff', off ? 2.5 : 2.2);
+		if (off) this.audio.oneShot('thunk', 0.4);
+		ap.msg = null;
+	}
+
+	runAutopilot(ctl, dt) {
+		const ap = this.autopilot, fm = this.fm, c = this.controls;
+		ap.preview(fm, this.cfg);
+		if (fm.crashed) { if (ap.engaged || ap.athr) ap.reset(); return; }
+		// pilot takeover: a firm stick input or moving the thrust levers disconnects
+		if (ap.engaged && c.pilotInput > 0.5) ap.disengage('Autopilot disconnected: pilot input');
+		if (ap.athr && this.athrSet !== null && Math.abs(c.throttle - this.athrSet) > 0.015) { ap.disengageAthr(); ap.msg = ap.msg || 'A/THR disconnected: thrust levers moved'; }
+		ap.apply(ctl, fm, this.cfg, dt);
+		if (ap.athr) { c.throttle = ctl.throttle; this.athrSet = ctl.throttle; } else this.athrSet = null;
+		this.flushAPMessage();
+	}
+
+	initFCU() {
+		const ap = this.autopilot = new Autopilot();
+		const step = { spd: [1, 10], hdg: [1, 10], alt: [100, 1000], vs: [100, 500] };
+		const nudge = (f, d, big) => { if (this.state !== 'flying' || !this.fm) return; ap.adjust(f, d * step[f][big ? 1 : 0], this.cfg); this.updateFCU(true); };
+		for (const el of document.querySelectorAll('.fcu-f')) {
+			const f = el.dataset.f;
+			el.addEventListener('wheel', (e) => { e.preventDefault(); nudge(f, -Math.sign(e.deltaY), e.shiftKey); }, { passive: false });
+			for (const b of el.querySelectorAll('b')) {
+				let rep = null;
+				const go = (e) => { e.preventDefault(); const d = +b.dataset.d; nudge(f, d, e.shiftKey); let n = 0; rep = setInterval(() => nudge(f, d, e.shiftKey || ++n > 12), 110); };
+				const stop = () => { clearInterval(rep); rep = null; };
+				b.addEventListener('pointerdown', go);
+				for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, stop);
+			}
+		}
+		const btn = (id, fn) => { const b = $(id); b.addEventListener('click', (e) => { e.preventDefault(); if (this.state === 'flying') fn(); b.blur(); }); };
+		btn('fcu-ap', () => this.toggleAP());
+		btn('fcu-athr', () => this.toggleAthr());
+		btn('fcu-app', () => this.toggleApproach());
+		this.fcuEls = { spd: $('fcu-spd'), hdg: $('fcu-hdg'), alt: $('fcu-alt'), vs: $('fcu-vs'), ap: $('fcu-ap'), athr: $('fcu-athr'), app: $('fcu-app'), fma: ['fma-spd', 'fma-lat', 'fma-vert', 'fma-ap'].map($) };
+		this.fcuCache = {};
+	}
+
+	updateFCU(force) {
+		if (!this.fcuEls) return;
+		const ap = this.autopilot, E = this.fcuEls, C = this.fcuCache;
+		if (!force && (this.fcuTick = (this.fcuTick || 0) + 1) % 3) return;
+		const set = (k, el, v, fn) => { if (C[k] !== v) { C[k] = v; fn(el, v); } };
+		const txt = (el, v) => { el.textContent = v; };
+		set('spd', E.spd, String(ap.spdTarget), txt);
+		set('hdg', E.hdg, String(ap.hdgTarget ?? 0).padStart(3, '0'), txt);
+		set('alt', E.alt, String(ap.altTarget).padStart(5, '0'), txt);
+		set('vs', E.vs, ap.vert === 'V/S' && ap.engaged ? (ap.altTarget * 0.3048 > this.fm.pos.y ? '+' : '-') + ap.vsSel : String(ap.vsSel), txt);
+		const cls = (el, v) => { el.classList.toggle('off', !v); };
+		set('spdOn', E.spd.parentElement, ap.athr, cls);
+		set('hdgOn', E.hdg.parentElement, ap.engaged && !ap.locCap, cls);
+		set('altOn', E.alt.parentElement, ap.engaged && !ap.gsCap, cls);
+		set('vsOn', E.vs.parentElement, ap.engaged && ap.vert === 'V/S', cls);
+		const on = (el, v) => { el.classList.toggle('on', v === 2); el.classList.toggle('arm', v === 1); };
+		set('apB', E.ap, ap.engaged ? 2 : 0, on);
+		set('athrB', E.athr, ap.athr ? 2 : 0, on);
+		set('appB', E.app, ap.gsCap || ap.rollout ? 2 : ap.appArmed ? 1 : 0, on);
+		const f = ap.engaged || ap.athr ? ap.fma() : ['', '', '', ''];
+		if (!ap.engaged && ap.athr) { f[0] = ap.spdMode; f[3] = 'A/THR'; }
+		f.forEach((v, i) => set('fma' + i, E.fma[i], v, txt));
 	}
 
 	// ------------------------------------------------------------------ simulation
@@ -454,6 +562,7 @@ class Game {
 			assist: this.settings.assist,
 		};
 		this.ctl = ctl;
+		this.runAutopilot(ctl, dt);
 		const H = 1 / 240;
 		this.accum = Math.min(this.accum + dt, 0.25);
 		let steps = 0;
@@ -893,6 +1002,7 @@ class Game {
 			const lev = this.model.cockpit.userData.levers || [];
 			for (const l of lev) l.rotation.x = 0.35 - this.controls.throttle * 0.9;
 		}
+		if (this.state === 'flying' && this.fm) this.updateFCU();
 		if (this.model && this.model.cockpit.userData.glow) {
 			const gi = Math.min(0.6, 0.05 / Math.max(this.exposure, 0.05));
 			for (const mat of this.model.cockpit.userData.glow) mat.emissiveIntensity = gi;

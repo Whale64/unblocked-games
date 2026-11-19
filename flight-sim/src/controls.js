@@ -6,6 +6,7 @@ export class Controls {
 		this.pressed = new Set();
 		this.axes = { pitch: 0, roll: 0, yaw: 0 };
 		this.throttle = 0;
+		this.pilotInput = 0;
 		this.invertPitch = false;
 		this.mouseYoke = false;
 		this.mouse = { x: 0, y: 0, dx: 0, dy: 0, dragging: false, button: -1, wheel: 0 };
@@ -108,6 +109,12 @@ export class Controls {
 			this.hwTouched[name] = true;
 			this.axes[name] = name === 'pitch' && this.invertPitch ? -a.value : a.value;
 		}
+		// how hard the pilot is actively flying (keyboard, hardware, touch; not the passive mouse yoke) - used to
+		// disconnect the autopilot when the pilot takes over
+		let pi = Math.max(Math.abs(p), Math.abs(r));
+		for (const name of ['pitch', 'roll']) { const a = dm.axis(name); if (a.bound) pi = Math.max(pi, Math.abs(a.value)); }
+		if (this.touch) pi = Math.max(pi, Math.abs(this.axes.pitch), Math.abs(this.axes.roll));
+		this.pilotInput = pi;
 		const thr = dm.level('throttle');
 		if (thr.changed) this.throttle = thr.value;
 		const dThr = dm.hold('throttleUp') - dm.hold('throttleDown');

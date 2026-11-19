@@ -31,6 +31,8 @@ export const BUTTON_ACTIONS = [
 	{ id: 'trimDown', label: 'Trim nose down (hold)', hold: true },
 	{ id: 'throttleUp', label: 'Throttle increase (hold)', hold: true },
 	{ id: 'throttleDown', label: 'Throttle decrease (hold)', hold: true },
+	{ id: 'autopilot', label: 'Autopilot on / off', key: 'KeyU' },
+	{ id: 'approach', label: 'Approach / autoland arm', key: 'KeyO' },
 	{ id: 'lookHat', label: 'Look-around hat switch (POV)', hat: true },
 	{ id: 'view', label: 'Cycle camera', key: 'KeyC' },
 	{ id: 'cockpit', label: 'Cockpit / chase view', key: 'KeyV' },
