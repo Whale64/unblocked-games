@@ -115,6 +115,26 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 .cap-state.go { color: var(--accent2); }
 .cap-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
 
+
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.mode { font: inherit; text-align: left; background: rgba(255,255,255,0.03); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 9px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; transition: border-color .15s, background .15s; }
+.mode b { font-size: 13px; }
+.mode span { font-size: 11px; color: var(--muted); }
+.mode.sel { border-color: var(--accent); background: rgba(92,200,255,0.12); box-shadow: 0 0 0 1px var(--accent) inset; }
+#mode-opts select { margin-left: 8px; }
+#mode-opts b { color: var(--accent2); }
+#result { background: rgba(2,6,12,0.45); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 12; }
+#result .dialog { min-width: min(420px, 92vw); }
+#res-title { color: #ffd27a; font-size: 15px; }
+#res-big { font: 800 64px/1.1 Inter, system-ui, sans-serif; margin: 6px 0 0; background: linear-gradient(135deg, #ffe08a, #ff9a3c); -webkit-background-clip: text; background-clip: text; color: transparent; }
+#res-score { font: 700 18px ui-monospace, Menlo, monospace; color: #fff; margin-bottom: 4px; }
+#res-rows { width: 100%; border-collapse: collapse; margin: 14px 0 8px; font-size: 13px; text-align: left; }
+#res-rows td { padding: 5px 4px; border-top: 1px solid rgba(255,255,255,0.07); }
+#res-rows td.v { color: #cddbea; font-variant-numeric: tabular-nums; }
+#res-rows td.p { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+#res-rows td.p.bad { color: #ff8a6a; }
+#res-best { font-size: 13px; color: var(--muted); }
+#res-best.new { color: var(--accent2); font-weight: 700; }
 /* autopilot flight control unit */
 #fcu { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 4px; user-select: none; -webkit-user-select: none; }
 #fcu.hidden { display: none; }
@@ -169,9 +189,16 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 		<div class="menu-head"><div class="logo">SKYWARD</div><div class="tag">6-DOF flight dynamics · volumetric skies · procedural world</div></div>
 		<div class="grid">
 			<div class="panel">
+				<h3>Mode</h3>
+				<div class="modes" id="modes">
+					<button class="mode" data-mode="free"><b>Free flight</b><span>Fly anywhere</span></button>
+					<button class="mode" data-mode="landing"><b>Landing challenge</b><span>Scored touchdowns</span></button>
+					<button class="mode" data-mode="rings"><b>Ring course</b><span>Race through gates</span></button>
+				</div>
+				<div id="mode-opts" class="hint" style="margin:-4px 0 12px"></div>
 				<h3>Aircraft</h3>
 				<div class="cards" id="aircraft-cards"></div>
-				<h3>Start position</h3>
+				<h3 id="spawn-h">Start position</h3>
 				<select id="spawn"></select>
 				<div class="checks" style="margin-top:14px">
 					<label><input type="checkbox" id="assist"> Flight assist</label>
@@ -204,6 +231,22 @@ kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: 
 			<button class="btn" id="help-btn">Controls</button>
 			<button class="btn" id="devices-btn">Flight controllers</button>
 			<span class="hint">Keyboard, mouse, gamepad or touch. Press <kbd>H</kbd> in flight for help, <kbd>Esc</kbd> to pause.</span>
+		</div>
+	</div>
+</div>
+
+<div id="result" class="overlay hidden">
+	<div class="dialog">
+		<h2 id="res-title"></h2>
+		<div id="res-big"></div>
+		<div id="res-score"></div>
+		<div id="res-sub" class="hint"></div>
+		<table id="res-rows"></table>
+		<div id="res-best"></div>
+		<div class="btns">
+			<button class="btn primary" id="res-retry">TRY AGAIN</button>
+			<button class="btn" id="res-continue">Keep flying</button>
+			<button class="btn" id="res-menu">Main menu</button>
 		</div>
 	</div>
 </div>

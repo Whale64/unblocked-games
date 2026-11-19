@@ -71,8 +71,47 @@ export class HUD {
 		if (!opts.minimal) this.drawApproach(t, opts, cx, cy, s);
 		this.drawMap(t, opts, w - 110 * s, h - 110 * s, 92 * s, s);
 		g.restore();
+		if (opts.challenge) this.drawChallenge(opts.challenge, s);
 		// fps / clock
 		this.text(`${Math.round(this.fps)} FPS  ${opts.clock}`, w - 10, 12, 11, 'rgba(255,255,255,0.65)', 'right', 'middle', '500');
+	}
+
+	// game-mode panel (top left) and a marker on the next target
+	drawChallenge(c, s) {
+		const g = this.g;
+		const x = 14, y = 14, lh = 18 * s;
+		g.save();
+		g.shadowColor = 'transparent';
+		g.font = `600 ${13 * s}px ui-monospace, Menlo, monospace`;
+		const w = Math.max(...c.lines.map(([l]) => g.measureText(l).width)) + 22;
+		g.fillStyle = 'rgba(6,12,20,0.62)';
+		g.beginPath();
+		if (g.roundRect) g.roundRect(x, y, w, c.lines.length * lh + 12, 8); else g.rect(x, y, w, c.lines.length * lh + 12);
+		g.fill();
+		c.lines.forEach(([l, col], i) => this.text(l, x + 11, y + 6 + lh * (i + 0.5), (i === 0 ? 12 : 13) * s, col, 'left', 'middle', i === 0 ? '800' : '600'));
+		const tg = c.screen;
+		if (tg) {
+			const W = this.w, H = this.h, m = 40 * s;
+			const inside = !tg.behind && tg.x > m && tg.x < W - m && tg.y > m && tg.y < H - m;
+			g.strokeStyle = '#ffb02e'; g.fillStyle = '#ffb02e'; g.lineWidth = 2 * s;
+			if (inside) {
+				const r = Math.max(10 * s, Math.min(tg.r, 200 * s)) + 6 * s, k = r * 0.45;
+				for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+					g.beginPath(); g.moveTo(tg.x + sx * r, tg.y + sy * (r - k)); g.lineTo(tg.x + sx * r, tg.y + sy * r); g.lineTo(tg.x + sx * (r - k), tg.y + sy * r); g.stroke();
+				}
+				this.text(`${tg.dist < 1000 ? Math.round(tg.dist) + ' m' : (tg.dist / 1000).toFixed(1) + ' km'}`, tg.x, tg.y + r + 12 * s, 12 * s, '#ffb02e');
+			} else {
+				// edge arrow pointing toward the target
+				let dx = tg.x - W / 2, dy = tg.y - H / 2;
+				if (tg.behind) { dx = -dx; dy = -dy; }
+				const a = Math.atan2(dy, dx);
+				const ex = W / 2 + Math.cos(a) * (W / 2 - m), ey = H / 2 + Math.sin(a) * (H / 2 - m);
+				g.save(); g.translate(ex, ey); g.rotate(a);
+				g.beginPath(); g.moveTo(14 * s, 0); g.lineTo(-8 * s, -10 * s); g.lineTo(-3 * s, 0); g.lineTo(-8 * s, 10 * s); g.closePath(); g.fill();
+				g.restore();
+			}
+		}
+		g.restore();
 	}
 
 	drawToasts(dt) {
@@ -405,6 +444,13 @@ export class HUD {
 			this.line(a[0], a[1], b[0], b[1]);
 			const c = toScreen(ap.x, ap.z);
 			this.text(ap.id, c[0], c[1] - 10 * s, 10 * s, '#ff9df5');
+		}
+		if (opts.mapMarks) {
+			for (const m of opts.mapMarks) {
+				const p = toScreen(m.x, m.z);
+				g.fillStyle = m.color;
+				g.beginPath(); g.arc(p[0], p[1], 3 * s, 0, Math.PI * 2); g.fill();
+			}
 		}
 		g.restore();
 		// aircraft symbol

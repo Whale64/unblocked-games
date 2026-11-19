@@ -66,13 +66,19 @@ export function spawnAircraft(fm, cfg, kind, airportIndex = 0) {
 	const p = fromRunwayLocal(ap, -hl - dist, 0);
 	const y = ap.elev + (big ? 2400 : cfg.engine === 'jet' ? 1800 : 900);
 	const v = big ? 118 : cfg.engine === 'jet' ? 190 : 58;
-	const t = trimState(cfg, v, y, 0);
-	fm.reset({ pos: new THREE.Vector3(p.x, y, p.z), heading: hdg, speed: v, onGround: false, gearDown: false, flaps: 0, throttle: 0, pitch: t.alpha / D });
-	fm.vel.set(ap.dir.x, 0, ap.dir.z).multiplyScalar(v); // level flight path, nose at the trim angle of attack
+	return spawnAirborne(fm, cfg, new THREE.Vector3(p.x, y, p.z), hdg, v);
+}
+
+// Level, trimmed flight at a given position, heading (deg) and true airspeed (m/s), clean configuration.
+export function spawnAirborne(fm, cfg, pos, headingDeg, v) {
+	const hd = headingDeg * D;
+	const t = trimState(cfg, v, pos.y, 0);
+	fm.reset({ pos: pos.clone(), heading: headingDeg, speed: v, onGround: false, gearDown: !cfg.retractable, flaps: 0, throttle: 0, pitch: t.alpha / D });
+	fm.vel.set(Math.sin(hd), 0, -Math.cos(hd)).multiplyScalar(v); // level flight path, nose at the trim angle of attack
 	fm.trim = Math.max(-1, Math.min(1, t.de));
 	fm.lawI = t.de;
 	fm.de = t.de;
-	const throttle = trimThrottle(cfg, v, y, 0, 0, 0);
+	const throttle = trimThrottle(cfg, v, pos.y, 0, cfg.retractable ? 0 : 1, 0);
 	fm.engine = cfg.afterburner === false ? throttle : Math.min(1, throttle / 0.92);
 	return { throttle };
 }

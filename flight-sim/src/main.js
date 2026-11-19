@@ -19,6 +19,7 @@ import { DevicesUI } from './devices-ui.js';
 import { initSettlements, towns, roads } from './settlements.js';
 import { CityLife } from './citylife.js';
 import { Autopilot } from './autopilot.js';
+import { LandingChallenge, RingCourse, LANDING_LEVELS, loadBests, fmtTime } from './challenges.js';
 
 const QUALITY = {
 	low: { pixelRatio: 0.75, msaa: 0, cloudScale: 0.35, cloudSteps: 20, bloom: false, godRays: false, shadows: 0, terrainN: 24, terrainSplit: 1.6, terrainMaxLevel: 6, treeRadius: 1500, treeNear: 450, treeDensity: 0.5, treeShadows: false, texSize: 256, cityRange: 8000, traffic: 0.4 },
@@ -64,7 +65,7 @@ function detectQuality() {
 }
 
 function loadSettings() {
-	const def = { aircraft: 'sparrow', spawn: 'runway', time: 9.5, weather: 'scattered', windSpeed: 8, windDir: 120, turbulence: 0.3, quality: null, invert: false, assist: true, mouseYoke: false, timeFlow: false, volume: 0.8, depthMode: 'auto' };
+	const def = { aircraft: 'sparrow', spawn: 'runway', time: 9.5, weather: 'scattered', windSpeed: 8, windDir: 120, turbulence: 0.3, quality: null, invert: false, assist: true, mouseYoke: false, timeFlow: false, volume: 0.8, depthMode: 'auto', mode: 'free', level: 'crosswind' };
 	let s = def;
 	try { s = { ...def, ...JSON.parse(localStorage.getItem('skyward-settings') || '{}') }; } catch { /* storage unavailable */ }
 	if (!s.quality || !QUALITY[s.quality]) s.quality = detectQuality();
@@ -271,7 +272,7 @@ class Game {
 			el.className = 'card' + (s.aircraft === id ? ' sel' : '');
 			el.innerHTML = `<div class="card-name">${a.name}</div><div class="card-role">${a.role}</div>
 				<div class="card-stats"><span>Vs ${a.vs} kt</span><span>Vne ${a.vne} kt</span><span>${a.fbw ? 'Fly-by-wire' : 'Mechanical'}</span><span>${(a.mass / 1000).toFixed(1)} t</span></div>`;
-			el.onclick = () => { s.aircraft = id; [...cards.children].forEach((c) => c.classList.remove('sel')); el.classList.add('sel'); };
+			el.onclick = () => { s.aircraft = id; this.updateModeUI(); [...cards.children].forEach((c) => c.classList.remove('sel')); el.classList.add('sel'); };
 			cards.appendChild(el);
 		}
 		const sp = $('spawn');
@@ -282,7 +283,9 @@ class Game {
 			const on = () => { s[key] = el.type === 'checkbox' ? el.checked : conv(el.value); if (live) live(); this.updateMenuLabels(); };
 			el.oninput = on; el.onchange = on;
 		};
-		bind('spawn', 'spawn');
+		bind('spawn', 'spawn', String, () => this.updateModeUI());
+		for (const b of document.querySelectorAll('#modes .mode')) b.onclick = () => { s.mode = b.dataset.mode; this.updateModeUI(); };
+		this.updateModeUI();
 		bind('time', 'time', parseFloat, () => { this.clockHour = s.time; this.atm.setTime(s.time); });
 		bind('weather', 'weather', String, () => this.applyWeather());
 		bind('wind-speed', 'windSpeed', parseFloat);
@@ -304,10 +307,33 @@ class Game {
 		$('crash-menu').onclick = () => this.toMenu();
 		$('help-btn').onclick = () => $('help').classList.toggle('hidden');
 		$('help-close').onclick = () => $('help').classList.add('hidden');
+		$('res-retry').onclick = () => this.startFlight();
+		$('res-continue').onclick = () => { $('result').classList.add('hidden'); if (this.challenge) { this.challenge.dispose(); this.challenge = null; } };
+		$('res-menu').onclick = () => this.toMenu();
 		this.initFCU();
 		this.devicesUI = new DevicesUI(this.controls.devices, $('devices'));
 		$('devices-btn').onclick = () => this.devicesUI.open();
 		$('pause-devices').onclick = () => this.devicesUI.open();
+	}
+
+	updateModeUI() {
+		const s = this.settings;
+		const mode = s.mode || 'free';
+		for (const b of document.querySelectorAll('#modes .mode')) b.classList.toggle('sel', b.dataset.mode === mode);
+		$('spawn-h').textContent = mode === 'free' ? 'Start position' : 'Airport (from start position)';
+		const sp = SPAWNS[s.spawn] || SPAWNS.runway;
+		const ap = airports[sp.ap] || airports[0];
+		const bests = loadBests();
+		const o = $('mode-opts');
+		if (mode === 'landing') {
+			const best = bests[`landing:${s.aircraft}:${ap.id}:${s.level}`];
+			o.innerHTML = `Wind <select id="level">${Object.entries(LANDING_LEVELS).map(([k, v]) => `<option value="${k}"${k === s.level ? ' selected' : ''}>${v.label}</option>`).join('')}</select>
+				&nbsp; Best at ${ap.id}: <b>${best ? `${best.score} (${best.grade})` : '—'}</b><br>Start on a crooked final approach; the challenge sets its own wind. Points for sink rate, touchdown point, centre line, alignment and speed. Autoland is not scored.`;
+			$('level').onchange = (e) => { s.level = e.target.value; this.updateModeUI(); };
+		} else if (mode === 'rings') {
+			const best = bests[`rings:${s.aircraft}:${ap.id}`];
+			o.innerHTML = `14 gates near ${ap.name}, the same track every time for each aircraft. Best: <b>${best ? fmtTime(best.time) : '—'}</b>`;
+		} else o.textContent = '';
 	}
 
 	updateMenuLabels() {
@@ -341,7 +367,13 @@ class Game {
 		this.scene.add(this.model.root);
 		this.fm = new FlightModel(cfg);
 		const sp = SPAWNS[s.spawn] || SPAWNS.runway;
-		const r = spawnAircraft(this.fm, cfg, sp.kind, sp.ap) || {};
+		if (this.challenge) { this.challenge.dispose(); this.challenge = null; }
+		clearTimeout(this.resultTimer);
+		$('result').classList.add('hidden');
+		const mode = s.mode || 'free';
+		if (mode === 'landing') this.challenge = new LandingChallenge(cfg, sp.ap, s.level);
+		else if (mode === 'rings') this.challenge = new RingCourse(cfg, sp.ap, this.scene);
+		const r = (this.challenge ? this.challenge.start(this.fm) : spawnAircraft(this.fm, cfg, sp.kind, sp.ap)) || {};
 		this.controls.throttle = r.throttle ?? 0;
 		this.controls.invertPitch = s.invert;
 		this.controls.mouseYoke = s.mouseYoke;
@@ -349,6 +381,8 @@ class Game {
 		const wd = s.windDir * Math.PI / 180;
 		this.fm.windBase.set(-Math.sin(wd), 0, Math.cos(wd)).multiplyScalar(s.windSpeed / 1.94384);
 		this.fm.turb = s.turbulence * 2.2;
+		if (r.wind) this.fm.windBase.copy(r.wind);
+		if (r.turb != null) this.fm.turb = r.turb;
 		this.effects.clear();
 		this.view = sp.kind === 'runway' ? 'chase' : 'chase';
 		this.cam = { yaw: 0, pitch: 0, dist: cfg.chase.dist, orbitYaw: 0.6, orbitPitch: 0.2, headYaw: 0, headPitch: 0, q: this.fm.quat.clone(), idle: 0, flyby: null, shake: 0, fov: 60 };
@@ -371,8 +405,10 @@ class Game {
 		this.state = 'flying';
 		this.paused = false;
 		this.hud.toasts = [];
-		this.hud.toast(`${cfg.name} · ${sp.label.replace('10', String(airports[sp.ap].numA).padStart(2, '0'))}`, '#cfe8ff', 4);
-		if (sp.kind === 'runway') this.hud.toast('Throttle up (Shift / R), rotate at ' + cfg.vr + ' kt (S / ↓)', '#ffffff', 6);
+		if (this.challenge) { const [a, b] = this.challenge.intro(); this.hud.toast(a, '#ffd27a', 5); this.hud.toast(b, '#ffffff', 6); }
+		else this.hud.toast(`${cfg.name} · ${sp.label.replace('10', String(airports[sp.ap].numA).padStart(2, '0'))}`, '#cfe8ff', 4);
+		if (this.challenge) { /* intro already shown */ }
+		else if (sp.kind === 'runway') this.hud.toast('Throttle up (Shift / R), rotate at ' + cfg.vr + ' kt (S / ↓)', '#ffffff', 6);
 		else if (sp.kind === 'approach') this.hud.toast('Fly it by hand, or press O for a full autoland', '#ffffff', 6);
 		else this.hud.toast('U engages the autopilot · set SPD / HDG / ALT on the panel below', '#ffffff', 6);
 		// pre-stream terrain at the spawn and compile every shader variant up front (avoids first-use hitches)
@@ -396,6 +432,10 @@ class Game {
 		$('crash').classList.add('hidden');
 		$('menu').classList.remove('hidden');
 		$('fcu').classList.add('hidden');
+		$('result').classList.add('hidden');
+		clearTimeout(this.resultTimer);
+		if (this.challenge) { this.challenge.dispose(); this.challenge = null; }
+		this.updateModeUI();
 		if (this.model) { this.scene.remove(this.model.root); this.model = null; }
 		if (this.audio.ctx) this.audio.ctx.suspend();
 	}
@@ -574,10 +614,28 @@ class Game {
 		this.accelAlong = this.prevVel ? fm.vel.clone().sub(this.prevVel).dot(fm.vel.clone().normalize()) / Math.max(dt, 1e-3) : 0;
 		this.prevVel = fm.vel.clone();
 		for (const e of fm.events.splice(0)) this.onEvent(e);
+		if (this.challenge && !fm.crashed) {
+			const res = this.challenge.update(dt, this);
+			if (res) { clearTimeout(this.resultTimer); this.resultTimer = setTimeout(() => this.showResult(res), 1500); }
+		}
+	}
+
+	showResult(res) {
+		if (this.state !== 'flying') return;
+		$('res-title').textContent = res.title;
+		$('res-big').textContent = res.big;
+		$('res-score').textContent = res.score || '';
+		$('res-sub').textContent = res.sub || '';
+		$('res-rows').innerHTML = res.rows.map((r) => `<tr><td>${r.label}</td><td class="v">${r.value}</td><td class="p${r.pts < 0 ? ' bad' : ''}">${r.pts == null ? '' : (r.max ? `${r.pts}<span style="opacity:.5"> / ${r.max}</span>` : r.pts)}</td></tr>`).join('');
+		const b = $('res-best');
+		b.textContent = res.best || '';
+		b.classList.toggle('new', !!res.newBest);
+		$('result').classList.remove('hidden');
 	}
 
 	onEvent(e) {
 		const fm = this.fm;
+		if (this.challenge) this.challenge.onEvent(e, this);
 		if (e.type === 'touchdown') {
 			const fpm = Math.round(-e.vs * 196.85);
 			const rating = fpm < 120 ? ['Butter! Greaser landing', '#7dffb0'] : fpm < 300 ? ['Smooth landing', '#b6ffcf'] : fpm < 550 ? ['Firm landing', '#ffe08a'] : ['Hard landing!', '#ff8a6a'];
@@ -595,6 +653,7 @@ class Game {
 			this.model.root.visible = false;
 			this.controls.devices.rumble(1, 1, 700);
 			this.crashTimer = 2.5;
+			if (this.challenge) this.challenge.done = true;
 			$('crash-reason').textContent = e.reason;
 			const t = fm.telemetry();
 			$('crash-stats').textContent = `${Math.round(t.ias)} kt · ${Math.round(t.vs)} fpm · max ${t.maxG.toFixed(1)} G`;
@@ -1028,7 +1087,22 @@ class Game {
 			const { ap, dist } = nearestAirport(fm.pos.x, fm.pos.z);
 			const brg = (Math.atan2(ap.x - fm.pos.x, -(ap.z - fm.pos.z)) * 180 / Math.PI + 360) % 360;
 			const velBody = fm.vel.clone().applyQuaternion(fm.quat.clone().invert());
+			let challenge = null, mapMarks = null;
+			if (this.challenge && !this.challenge.done) {
+				const st = this.challenge.status(this);
+				challenge = { lines: st.lines };
+				mapMarks = st.marks;
+				if (st.target) {
+					const pc = st.target.clone().applyMatrix4(this.camera.matrixWorldInverse);
+					const behind = pc.z > 0;
+					const pn = pc.clone().applyMatrix4(this.camera.projectionMatrix);
+					const W = this.hud.w, Hh = this.hud.h;
+					const ppd = (Hh / 2) / Math.tan(this.camera.fov * Math.PI / 360);
+					challenge.screen = { x: (pn.x * 0.5 + 0.5) * W, y: (0.5 - pn.y * 0.5) * Hh, behind, dist: st.target.distanceTo(fm.pos), r: (this.challenge.P?.R || 30) / Math.max(-pc.z, 1) * ppd };
+				}
+			}
 			this.hud.draw(fm.crashed ? null : tel, {
+				challenge, mapMarks,
 				dt, fov: this.camera.fov, cfg: this.cfg, throttle: this.controls.throttle, time: this.time, paused: this.paused,
 				velBody, accelAlong: this.accelAlong, pos: fm.pos, approach: (this.lastApproach = computeApproach(fm.pos, tel.heading)),
 				minimal: this.view === 'cockpit' && (this.cfg.category === 'airliner' || this.cfg.engine === 'prop'),

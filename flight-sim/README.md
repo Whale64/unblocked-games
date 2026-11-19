@@ -50,6 +50,12 @@ It needs no server, no install and no network access, so it works offline, from 
 - GPWS-style warnings: PULL UP, TERRAIN, GEAR, BANK ANGLE and STALL, with voice callouts. Radio-altitude callouts are spoken on approach.
 - Landing rating based on touchdown vertical speed.
 
+### Game modes
+- **Free flight**: fly anywhere from any start position.
+- **Landing challenge**: you start on a crooked final approach, off the centre line and the glide path, with Calm, Crosswind or Gusty storm wind. Each touchdown is scored out of 1000 for sink rate, touchdown point (aim 300 m past the threshold), centre line, crab angle, speed against Vref and wings level. Bounces and runway excursions cost points. You get a grade from S to D. Autoland is not scored.
+- **Ring course**: race through 14 glowing gates near the chosen airport. Each aircraft has its own seeded track: gate size, spacing and turns are sized for that aircraft, and the gates keep clear of terrain with a flyable climb gradient. The HUD brackets the next gate, or shows an edge arrow when it is off-screen, and the map shows the gates ahead. A missed gate adds 5 s.
+- **Personal bests** are saved in the browser for each aircraft, airport and difficulty, and shown in the menu and on the results card.
+
 ### Autopilot and autothrottle
 - **Flight control panel** at the bottom of the screen: set SPD, HDG, ALT and V/S with the arrows or the mouse wheel (hold `Shift` for big steps), and switch AP, A/THR and APP on or off. Values you preselect before engaging are used when you engage.
 - **Lateral modes**: HDG (heading select) and LOC. LOC flies a ground-track loop, so it corrects for crosswind.

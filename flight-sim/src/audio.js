@@ -150,6 +150,16 @@ export class Audio {
 			const og = this.gain(0, this.comp); o.connect(og);
 			og.gain.setValueAtTime(1.2, t); og.gain.exponentialRampToValueAtTime(0.001, t + 2);
 			o.start(t); o.stop(t + 2.1);
+		} else if (kind === 'ding' || kind === 'miss' || kind === 'fanfare') {
+			// ring passed / missed / course complete
+			const notes = kind === 'ding' ? [1318, 1976] : kind === 'miss' ? [330, 220] : [784, 988, 1175, 1568];
+			notes.forEach((f, i) => {
+				const o = ctx.createOscillator(); o.type = kind === 'miss' ? 'sawtooth' : 'triangle'; o.frequency.value = f;
+				const g = this.gain(0); o.connect(g);
+				const t0 = t + i * (kind === 'fanfare' ? 0.12 : 0.08);
+				g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(kind === 'miss' ? 0.06 : 0.16, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.001, t0 + (kind === 'fanfare' && i === notes.length - 1 ? 0.9 : 0.35));
+				o.start(t0); o.stop(t0 + 1);
+			});
 		} else if (kind === 'splash') {
 			const n = this.noise(); const bp = this.filt('bandpass', 900, 0.4); const g = this.gain(0, this.comp);
 			n.connect(bp); bp.connect(g);
