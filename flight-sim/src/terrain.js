@@ -4,6 +4,8 @@ import { getHeight, airports, toRunwayLocal } from './world.js';
 import { fbm2Tile } from './clouds.js';
 import { WORLD_LIGHT_GLSL, worldUniforms, patchWorldLighting } from './worldlight.js';
 import { generateLayerTextures } from './texgen.js';
+import { ROAD_GLSL } from './citylife.js';
+import { townAt, roadClearance } from './settlements.js';
 import { hash2, smoothstep } from './noise.js';
 
 export const MACRO_SIZE = 512;
@@ -258,6 +260,9 @@ void terrainShade(inout vec3 col) {
 	float n1 = vnoise(wp.xz * 0.012);
 	float n2 = vnoise(wp.xz * 0.11);
 	float nearT = 1.0 - smoothstep(900.0, 3200.0, dist);
+	vec4 rd = roadAt(wp.xz);
+	float urban = rd.b;
+	float road = smoothstep(0.22, 0.6, rd.r);
 
 	// ---------------- macro colour (what you see from altitude)
 	vec3 grassA = vec3(0.085, 0.135, 0.038);
@@ -268,7 +273,7 @@ void terrainShade(inout vec3 col) {
 	c = mix(c, dryG, dryW);
 	c *= 0.82 + 0.36 * mix(0.5, n2, 0.8);
 
-	float fieldMask = smoothstep(0.52, 0.62, m.g) * smoothstep(420.0, 180.0, h) * smoothstep(0.1, 0.04, slope) * smoothstep(3.0, 8.0, h);
+	float fieldMask = smoothstep(0.52, 0.62, m.g) * smoothstep(420.0, 180.0, h) * smoothstep(0.1, 0.04, slope) * smoothstep(3.0, 8.0, h) * (1.0 - urban);
 	float plowed = 0.0;
 	if (fieldMask > 0.0) {
 		float ang = 0.35 + floor(m.b * 3.0) * 0.5;
@@ -287,7 +292,7 @@ void terrainShade(inout vec3 col) {
 		c = mix(c, fc, fieldMask);
 		plowed = fieldMask * (1.0 - hedge) * ((hs >= 0.5 && hs < 0.68) || hs < 0.22 ? 1.0 : 0.0);
 	}
-	float forest = smoothstep(0.52, 0.62, m.r) * smoothstep(3.0, 8.0, h) * smoothstep(2000.0, 1750.0, h) * smoothstep(0.45, 0.3, slope);
+	float forest = smoothstep(0.52, 0.62, m.r) * smoothstep(3.0, 8.0, h) * smoothstep(2000.0, 1750.0, h) * smoothstep(0.45, 0.3, slope) * (1.0 - min(1.0, urban * 1.3 + road));
 	vec3 canopy = mix(vec3(0.03, 0.062, 0.022), vec3(0.06, 0.09, 0.032), n2);
 	c = mix(c, canopy, forest * 0.85);
 	float strata = vnoise(vec2(h * 0.12 + n1 * 3.0, wp.x * 0.0007));
@@ -345,6 +350,28 @@ void terrainShade(inout vec3 col) {
 		tDetAO = mix(1.0, ao, nearT);
 	}
 
+	// ---------------- towns and roads (from the streaming road maps)
+	if (urban > 0.01) {
+		float park = smoothstep(0.55, 0.75, vnoise(wp.xz * 0.012 + 3.1));
+		vec3 lot = mix(vec3(0.16, 0.15, 0.14), vec3(0.24, 0.23, 0.21), vnoise(wp.xz * 0.05));
+		vec3 garden = mix(vec3(0.07, 0.11, 0.04), vec3(0.1, 0.13, 0.05), vnoise(wp.xz * 0.2));
+		c = mix(c, mix(lot, garden, max(park, 0.35)), urban * 0.75);
+	}
+	if (road > 0.001) {
+		vec3 asph = vec3(0.045, 0.045, 0.048);
+		if (nearT > 0.0) {
+			const float SR = 1.0 / 3.0;
+			vec4 at = sA(vec3(wp.xz * SR, 6.0), gX * SR, gY * SR);
+			asph = mix(asph, at.rgb, nearT);
+			vec4 an = sN(vec3(wp.xz * SR, 6.0), gX * SR, gY * SR);
+			Noff = mix(Noff, topOff(an) * 0.5 * nearT, road);
+		}
+		c = mix(c, asph, road);
+		c = mix(c, vec3(0.6, 0.6, 0.58), rd.g * road);
+		tRough = mix(tRough, 0.8, road);
+		tDetAO = mix(tDetAO, 1.0, road);
+	}
+
 	// ---------------- airports
 	float pav = 0.0;
 	float aa = max(fwidth(wp.x), fwidth(wp.z)) + 0.02;
@@ -371,7 +398,7 @@ void terrainShade(inout vec3 col) {
 	tN = normalize(n + Noff);
 
 	// ---------------- ocean / lakes
-	float water = smoothstep(0.02, 0.6, vWater);
+	float water = smoothstep(0.02, 0.6, vWater) * (1.0 - road);
 	if (water > 0.0) {
 		float depth = vWater;
 		vec2 g = waveSlope(wp.xz, dist, uTime);
@@ -426,7 +453,7 @@ function createTerrainMaterial(macroTex, cloudTex, layers) {
 			.replace('#include <common>', '#include <common>\nattribute float aWater;\nvarying vec3 vWPos;\nvarying vec3 vWNormal;\nvarying float vWater;')
 			.replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNormal = normalize(mat3(modelMatrix) * objectNormal);\nvWater = aWater;');
 		shader.fragmentShader = shader.fragmentShader
-			.replace('#include <common>', '#include <common>\n' + WORLD_LIGHT_GLSL + TERRAIN_PARS)
+			.replace('#include <common>', '#include <common>\n' + WORLD_LIGHT_GLSL + ROAD_GLSL + TERRAIN_PARS)
 			.replace('#include <color_fragment>', '#include <color_fragment>\nterrainShade(diffuseColor.rgb);')
 			.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = tRough;')
 			.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize((viewMatrix * vec4(tN, 0.0)).xyz);')
@@ -844,6 +871,7 @@ export class Terrain {
 				if (Math.abs(l.u) < ap.flatU + 300 && l.v > ap.flatVmin - 250 && l.v < ap.flatVmax + 250) { nearRwy = true; break; }
 			}
 			if (nearRwy) continue;
+			if (townAt(x, z, 40) || roadClearance(x, z) < 7) continue;
 			const type = (h > 700 || hash2(k, ci + cj) < 0.45) ? 'conifer' : 'broad';
 			const sc = 0.7 + hash2(k * 3, ci - cj) * 0.75;
 			q.setFromAxisAngle(up, r1 * 40);
