@@ -56,11 +56,11 @@ void main() {
 		col = mix(col, vec3(0.20, 0.17, 0.09), thatch * 0.6);
 		h = base * 0.15;
 		// clover / weed patches
-		float clov = smoothstep(0.58, 0.68, fbm(uv + 7.3, vec2(5.0), 4, 0.5));
+		float clov = smoothstep(0.62, 0.72, fbm(uv + 7.3, vec2(9.0), 4, 0.5));
 		if (clov > 0.0) {
 			vec3 lv = vor(uv, 90.0);
 			float leaf = smoothstep(0.45, 0.3, lv.x) * clov;
-			col = mix(col, mix(vec3(0.05, 0.10, 0.035), vec3(0.09, 0.15, 0.05), lv.z), leaf);
+			col = mix(col, mix(vec3(0.06, 0.10, 0.035), vec3(0.08, 0.125, 0.04), lv.z), leaf * 0.7);
 			h = max(h, leaf * (0.45 - lv.x) * 1.4 + 0.2 * leaf);
 		}
 		// three layers of blades, each cell holding two blades with random direction, length and tint
