@@ -87,13 +87,13 @@ void main() {
 					float hb = 0.3 + float(L) * 0.2 + t * 0.25 + r.y * 0.1 + (1.0 - a * a) * 0.08;
 					if (hb <= h) continue;
 					h = hb;
-					float dryB = step(0.9, h21(cell + kk + 23.0)) + lush * 0.15;
+					float dryB = step(0.9, h21(cell + kk + 23.0));
 					vec3 g0 = mix(vec3(0.07, 0.13, 0.03), vec3(0.13, 0.20, 0.05), r.x);
 					g0 = mix(g0, vec3(0.05, 0.11, 0.04), r.y * 0.5);
 					g0 = mix(g0, vec3(0.26, 0.23, 0.10), clamp(dryB, 0.0, 1.0) * 0.7);
 					g0 *= 0.65 + 0.55 * t; // darker at the base, catching light toward the tip
 					g0 *= 1.0 - 0.25 * a * a; // rounded blade, darker at the edges
-					col = g0 * (0.8 + 0.4 * lush);
+					col = g0 * (0.93 + 0.14 * lush);
 				}
 			}
 		}
