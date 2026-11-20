@@ -51,9 +51,9 @@ void main() {
 		float lush = fbm(uv + 0.31, vec2(3.0), 4, 0.5);
 		float base = fbm(uv, vec2(9.0), 5, 0.55);
 		// background: dead thatch and soil showing through
-		col = mix(vec3(0.045, 0.040, 0.020), vec3(0.11, 0.095, 0.05), base);
+		col = mix(vec3(0.03, 0.04, 0.016), vec3(0.07, 0.08, 0.035), base);
 		float thatch = pow(gn(uv * 70.0 + base * 3.0, vec2(70.0)), 3.0);
-		col = mix(col, vec3(0.20, 0.17, 0.09), thatch * 0.6);
+		col = mix(col, vec3(0.13, 0.12, 0.06), thatch * 0.3);
 		h = base * 0.15;
 		// clover / weed patches
 		float clov = smoothstep(0.62, 0.72, fbm(uv + 7.3, vec2(9.0), 4, 0.5));
