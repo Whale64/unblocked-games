@@ -305,7 +305,16 @@ void terrainShade(inout vec3 col) {
 	c = mix(c, dryG, dryW);
 	c *= 0.82 + 0.36 * mix(0.5, n2, 0.8);
 
-	float fieldMask = smoothstep(0.52, 0.62, m.g) * smoothstep(420.0, 180.0, h) * smoothstep(0.1, 0.04, slope) * smoothstep(3.0, 8.0, h) * (1.0 - urban);
+	// airfields are mown grass: no crop fields or forest inside the airport boundary
+	float aptZone = 0.0;
+	for (int i = 0; i < 3; i++) {
+		if (i >= uRwyCount) break;
+		vec2 q = wp.xz - uRwyA[i].xy;
+		vec2 dr = vec2(sin(uRwyA[i].z), -cos(uRwyA[i].z));
+		float au = abs(dot(q, dr)), av = dot(q, vec2(-dr.y, dr.x));
+		aptZone = max(aptZone, smoothstep(uRwyA[i].w * 0.5 + 520.0, uRwyA[i].w * 0.5 + 420.0, au) * smoothstep(-260.0, -160.0, av) * smoothstep(520.0, 420.0, av));
+	}
+	float fieldMask = (1.0 - aptZone) * smoothstep(0.52, 0.62, m.g) * smoothstep(420.0, 180.0, h) * smoothstep(0.1, 0.04, slope) * smoothstep(3.0, 8.0, h) * (1.0 - urban);
 	float plowed = 0.0;
 	if (fieldMask > 0.0) {
 		float ang = 0.35 + floor(m.b * 3.0) * 0.5;
@@ -324,7 +333,7 @@ void terrainShade(inout vec3 col) {
 		c = mix(c, fc, fieldMask);
 		plowed = fieldMask * (1.0 - hedge) * ((hs >= 0.5 && hs < 0.68) || hs < 0.22 ? 1.0 : 0.0);
 	}
-	float forest = smoothstep(0.52, 0.62, m.r) * smoothstep(3.0, 8.0, h) * smoothstep(2000.0, 1750.0, h) * smoothstep(0.45, 0.3, slope) * (1.0 - min(1.0, urban * 1.3 + road));
+	float forest = (1.0 - aptZone) * smoothstep(0.52, 0.62, m.r) * smoothstep(3.0, 8.0, h) * smoothstep(2000.0, 1750.0, h) * smoothstep(0.45, 0.3, slope) * (1.0 - min(1.0, urban * 1.3 + road));
 	vec3 canopy = mix(vec3(0.03, 0.062, 0.022), vec3(0.06, 0.09, 0.032), n2);
 	c = mix(c, canopy, forest * 0.85);
 	float strata = vnoise(vec2(h * 0.12 + n1 * 3.0, wp.x * 0.0007));
