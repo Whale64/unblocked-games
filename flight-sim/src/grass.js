@@ -85,7 +85,7 @@ const GRASS_VERT_MAIN = /* glsl */`
 	float H = uBlade.x * aBlade.w * sc;
 	float W = uBlade.y * step(0.001, sc) * (1.0 + dist / 30.0);
 	// natural lean plus wind sway (gusts travel across the field)
-	float bend = 0.25 + 0.5 * fract(r2 * 7.3 + aBlade.z);
+	float bend = 0.06 + 0.3 * fract(r2 * 7.3 + aBlade.z);
 	float sway = (sin(uTime * 1.6 + dot(root, vec2(0.13, 0.11)) * uGrassWind.z * 0.4) * 0.6 + sin(uTime * 3.7 + root.x * 1.3 + root.y * 0.7) * 0.25) * uGrassWind.z;
 	vec2 lean = fdir * bend + uGrassWind.xy * (uGrassWind.z * 0.6 + sway);
 	float tt = t * t;
@@ -94,8 +94,9 @@ const GRASS_VERT_MAIN = /* glsl */`
 	gPos.y += H * t * (1.0 - 0.35 * length(lean) * tt);
 	vec3 bn = normalize(vec3(fdir.x, 0.0, fdir.y) * 0.45 + vec3(0.0, 1.0, 0.0));
 	// colour: the ground's own colour, darker in the clump, brighter / yellower at the tips
-	vec3 tip = mix(alb * 1.6, vec3(0.2, 0.2, 0.08), 0.18 + 0.2 * r3);
-	vGrassCol = mix(alb * 0.55, tip, t) * (0.85 + 0.3 * r2);
+	vec3 tip = alb * vec3(1.3, 1.55, 1.05);
+	tip = mix(tip, vec3(0.2, 0.19, 0.08), step(0.88, fract(r3 * 13.7 + aBlade.z)) * 0.6); // a few dry blades
+	vGrassCol = mix(alb * 0.75, tip, t) * (0.88 + 0.24 * r2);
 	vGrassT = t;
 `;
 
@@ -135,8 +136,8 @@ export class Grass {
 		if (!g) return;
 		// [grid size, spacing m, blades per clump, blade height m, width m, fade in a,b, fade out c,d]
 		const defs = g >= 2
-			? [[150, 0.42, 6, 0.42, 0.035, -1, 0, 25, 31], [116, 1.25, 7, 0.5, 0.06, 25, 31, 58, 72]]
-			: [[118, 0.5, 5, 0.42, 0.04, -1, 0, 20, 26], [80, 1.45, 6, 0.5, 0.07, 20, 26, 46, 58]];
+			? [[150, 0.42, 6, 0.5, 0.045, -1, 0, 25, 31], [116, 1.25, 7, 0.58, 0.08, 25, 31, 58, 72]]
+			: [[118, 0.5, 5, 0.5, 0.05, -1, 0, 20, 26], [80, 1.45, 6, 0.58, 0.09, 20, 26, 46, 58]];
 		for (const [G, sp, nb, bh, bw, a, b, c, d] of defs) {
 			const geo = clumpGeometry(nb, G * 31 + 7);
 			const cells = new Float32Array(G * G * 2);
