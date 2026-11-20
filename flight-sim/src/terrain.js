@@ -207,8 +207,9 @@ void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa, vec4 a
 		float ck = abs(vnoise(wp.xz * 0.09 + vec2(float(i) * 3.1)) - 0.5);
 		float ck2 = abs(vnoise(wp.xz * 0.21 + 7.7) - 0.5);
 		float crack = max(smoothstep(0.012 + aa * 0.09, 0.0, ck), smoothstep(0.008 + aa * 0.2, 0.0, ck2) * 0.7);
-		crack *= step(0.45, vnoise(wp.xz * 0.013 + 1.7)) * texF;
-		pc = mix(pc, vec3(0.012, 0.012, 0.013), crack * pav * 0.85);
+		// only in a few worn areas, and broken into short segments
+		crack *= smoothstep(0.62, 0.72, vnoise(wp.xz * 0.011 + 1.7)) * step(0.45, vnoise(wp.xz * 0.35 + 9.1)) * texF;
+		pc = mix(pc, vec3(0.015, 0.015, 0.016), crack * pav * 0.6);
 		float sEnd = hl - abs(u);
 		// rubber deposits in the touchdown zone: streaky, densest along the main-gear tracks
 		float tdz = smoothstep(120.0, 320.0, sEnd) * smoothstep(1100.0, 600.0, sEnd);
@@ -252,7 +253,7 @@ void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa, vec4 a
 		yellow = max(yellow, max(max(tcl, hold), max(stand, apronEdge)) * (1.0 - mainR));
 		col = mix(col, pc, pav);
 		pavOut = max(pavOut, pav);
-		float wear = 0.55 + 0.45 * smoothstep(0.25, 0.6, vnoise(wp.xz * 1.7 + 4.0));
+		float wear = 0.8 + 0.2 * smoothstep(0.2, 0.6, vnoise(wp.xz * 0.9 + 4.0));
 		white *= mix(1.0, wear, texF) * (1.0 - 0.6 * skid);
 		col = mix(col, vec3(0.62, 0.62, 0.6) * mix(1.0, 0.75 + 0.5 * aspT.a, texF), white);
 		col = mix(col, vec3(0.55, 0.38, 0.04), yellow);
