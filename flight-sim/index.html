@@ -5461,7 +5461,8 @@ void terrainShade(inout vec3 col) {
 		vec3 off = topOff(N);
 		float rgh = N.b, ao = N.a, f;
 		#define LAYER_TOP(L, W, SC) { vec2 u_ = wp.xz * SC; vec4 a_ = sA(vec3(u_, L), gX * SC, gY * SC); f = hblend(W, A.a, a_.a); if (f > 0.0) { vec4 n_ = sN(vec3(u_, L), gX * SC, gY * SC); A = mix(A, a_, f); M = mix(M, layerMean(L), f); off = mix(off, topOff(n_), f); rgh = mix(rgh, n_.b, f); ao = mix(ao, n_.a, f); } }
-		float dryD = max(dryW, plowed * 0.9);
+		// bare soil only on ploughed fields; dry grassland keeps the grass texture (tinted by the macro colour)
+		float dryD = plowed * 0.9;
 		if (dryD > 0.01) LAYER_TOP(1.0, dryD, (1.0 / 4.0))
 		if (forest > 0.01) LAYER_TOP(5.0, forest * 0.9, (1.0 / 5.0))
 		if (beach > 0.01) LAYER_TOP(3.0, beach, (1.0 / 5.0))
