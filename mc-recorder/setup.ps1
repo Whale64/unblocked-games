@@ -70,7 +70,18 @@ $lnk.Arguments        = "`"$(Join-Path $App 'mc_recorder.py')`""
 $lnk.WorkingDirectory = $App
 $lnk.Save()
 
+# "MC Recorder Settings" shortcut on the Desktop and in the Start menu
+$programs = [Environment]::GetFolderPath("Programs")
+foreach ($dir in @([Environment]::GetFolderPath("Desktop"), $programs)) {
+    $s = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $dir "MC Recorder Settings.lnk"))
+    $s.TargetPath       = $pyw
+    $s.Arguments        = "`"$(Join-Path $App 'settings_gui.py')`""
+    $s.WorkingDirectory = $App
+    $s.Save()
+}
+
 Start-Process $pyw -ArgumentList "`"$(Join-Path $App 'mc_recorder.py')`"" -WorkingDirectory $App
 Write-Host ""
 Write-Host "Done! MC Recorder is running in the background and will start with Windows." -ForegroundColor Green
 Write-Host "Open Minecraft from Prism Launcher and it will record automatically."
+Write-Host "Change quality/fps/audio etc. with the 'MC Recorder Settings' shortcut on your Desktop."

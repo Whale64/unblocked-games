@@ -3,7 +3,7 @@
 Automatically records your screen while Minecraft is running from **Prism Launcher**,
 then uploads the video to a **Google Drive** folder when you close the game.
 
-- 360p, 24 fps, H.264 MP4, **no audio**
+- Defaults: 360p, 24 fps, H.264 MP4, no audio (all adjustable in the settings window)
 - Starts recording when the game window process launches, stops when it exits
 - Uploads in the background with rclone; failed uploads retry on next launch
 - Deletes the local copy after a successful upload (configurable)
@@ -20,17 +20,21 @@ then uploads the video to a **Google Drive** folder when you close the game.
 
 That's it — launch any instance from Prism Launcher and it records.
 
-## Settings (`config.json`)
+## Settings
 
-| key | default | meaning |
-|---|---|---|
-| `recordings_dir` | `%USERPROFILE%\Videos\MC Recordings` | where videos are saved before upload |
-| `drive_folder` | `Minecraft Recordings` | Google Drive folder (created if missing) |
-| `height` / `fps` | `360` / `24` | output resolution and frame rate |
-| `crf` | `28` | quality (lower = better/larger) |
-| `delete_after_upload` | `true` | remove local file once uploaded |
+Open **MC Recorder Settings** (Desktop / Start menu shortcut, or `settings.bat`).
+Changes apply the next time you launch Minecraft, so there's no need to restart.
 
-Restart the recorder after editing (log out/in, or run `uninstall.bat` then `setup.bat`).
+| Tab | Options |
+|---|---|
+| **Video** | resolution (native, 360p–1440p or custom), fps, encoder (x264, x265, NVIDIA, Intel, AMD), speed preset, constant quality (CRF) **or** fixed bitrate (kbps), show cursor |
+| **Audio** | on/off (off by default), input device (Stereo Mix / mic / virtual cable), audio bitrate |
+| **Output & Upload** | format (mp4/mkv), local save folder, upload on/off, Drive folder, delete after upload |
+
+**Test recording (5 s)** records a short clip with the current settings, opens it, and
+estimates the file size per hour, so you can check quality before you play.
+
+All settings live in `config.json` if you prefer editing by hand.
 
 ## Troubleshooting
 

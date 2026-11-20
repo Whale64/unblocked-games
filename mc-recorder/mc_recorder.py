@@ -4,11 +4,12 @@ screen (360p, 24fps, no audio) while it runs, then uploads the video to Google
 Drive with rclone.
 
 Runs silently in the background (start it with pythonw.exe).
+Change settings with settings_gui.py; they apply from the next game launch.
 Logs go to mc_recorder.log next to this script.
 """
 import json
 import logging
-import os
+import re
 import socket
 import subprocess
 import sys
@@ -29,12 +30,29 @@ DEFAULT_CONFIG = {
     "rclone_path": str(APP_DIR / "tools" / "rclone.exe"),
     "rclone_remote": "gdrive",
     "drive_folder": "Minecraft Recordings",
-    "height": 360,
+    # video
+    "height": 360,            # 0 = native screen resolution
     "fps": 24,
+    "encoder": "libx264",     # libx264, libx265, h264_nvenc, hevc_nvenc, h264_qsv, h264_amf
+    "preset": "veryfast",     # libx264/libx265 only
+    "rate_control": "crf",    # "crf" (constant quality) or "bitrate"
     "crf": 28,
+    "video_bitrate_kbps": 1500,
+    "draw_mouse": True,
+    # audio
+    "audio_enabled": False,
+    "audio_device": "",       # DirectShow device name, e.g. "Stereo Mix (Realtek Audio)"
+    "audio_bitrate_kbps": 128,
+    # output
+    "container": "mp4",       # mp4 or mkv
+    "upload_enabled": True,
     "delete_after_upload": True,
     "poll_seconds": 3,
 }
+
+ENCODERS = ["libx264", "libx265", "h264_nvenc", "hevc_nvenc", "h264_qsv", "h264_amf"]
+X264_PRESETS = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"]
+CONTAINERS = ["mp4", "mkv"]
 
 # Java main classes Prism Launcher (and MultiMC forks) use to start the game.
 LAUNCHER_ENTRYPOINTS = ("org.prismlauncher.entrypoint", "org.multimc.entrypoint")
@@ -59,8 +77,77 @@ def load_config():
         except Exception as e:  # keep running with defaults
             log.error("Bad config.json, using defaults: %s", e)
     else:
-        CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2), encoding="utf-8")
+        save_config(DEFAULT_CONFIG)
     return cfg
+
+
+def save_config(cfg):
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def list_audio_devices(ffmpeg_path):
+    """Return DirectShow audio device names ffmpeg can record from."""
+    try:
+        r = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            capture_output=True, text=True, errors="replace", creationflags=CREATE_NO_WINDOW,
+        )
+    except OSError:
+        return []
+    return re.findall(r'"([^"]+)"\s*\(audio\)', r.stderr)
+
+
+def build_ffmpeg_cmd(cfg, out_path, duration=None):
+    """Build the ffmpeg command line for the given settings."""
+    enc = cfg["encoder"]
+    cmd = [cfg["ffmpeg_path"], "-hide_banner", "-loglevel", "error", "-y",
+           "-thread_queue_size", "512",
+           "-f", "gdigrab", "-framerate", str(cfg["fps"]),
+           "-draw_mouse", "1" if cfg["draw_mouse"] else "0",
+           "-i", "desktop"]
+    audio = cfg["audio_enabled"] and cfg["audio_device"]
+    if audio:
+        cmd += ["-thread_queue_size", "512", "-f", "dshow", "-i", f"audio={cfg['audio_device']}"]
+    if duration:
+        cmd += ["-t", str(duration)]
+
+    if int(cfg["height"]) > 0:
+        cmd += ["-vf", f"scale=-2:{int(cfg['height'])}"]
+
+    cmd += ["-c:v", enc]
+    if enc in ("libx264", "libx265"):
+        cmd += ["-preset", cfg["preset"]]
+    elif enc.endswith("_nvenc"):
+        cmd += ["-preset", "p4"]
+
+    if cfg["rate_control"] == "bitrate":
+        b = int(cfg["video_bitrate_kbps"])
+        cmd += ["-b:v", f"{b}k", "-maxrate", f"{b}k", "-bufsize", f"{b * 2}k"]
+    else:
+        q = str(int(cfg["crf"]))
+        if enc in ("libx264", "libx265"):
+            cmd += ["-crf", q]
+        elif enc.endswith("_nvenc"):
+            cmd += ["-rc", "vbr", "-cq", q, "-b:v", "0"]
+        elif enc.endswith("_qsv"):
+            cmd += ["-global_quality", q]
+        elif enc.endswith("_amf"):
+            cmd += ["-rc", "cqp", "-qp_i", q, "-qp_p", q]
+
+    cmd += ["-pix_fmt", "nv12" if enc.endswith("_qsv") else "yuv420p"]
+
+    if audio:
+        cmd += ["-c:a", "aac", "-b:a", f"{int(cfg['audio_bitrate_kbps'])}k"]
+    else:
+        cmd += ["-an"]
+
+    if cfg["container"] == "mp4":
+        # fragmented mp4: file stays playable even if the PC crashes mid-game
+        cmd += ["-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4"]
+    else:
+        cmd += ["-f", "matroska"]
+    cmd.append(str(out_path))
+    return cmd
 
 
 def single_instance_lock():
@@ -101,22 +188,9 @@ class Recorder:
     def start(self):
         out_dir = Path(self.cfg["recordings_dir"])
         out_dir.mkdir(parents=True, exist_ok=True)
-        self.path = out_dir / f"minecraft_{datetime.now():%Y-%m-%d_%H-%M-%S}.mp4"
-        cmd = [
-            self.cfg["ffmpeg_path"],
-            "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "gdigrab",
-            "-framerate", str(self.cfg["fps"]),
-            "-draw_mouse", "1",
-            "-i", "desktop",
-            "-vf", f"scale=-2:{self.cfg['height']}",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(self.cfg["crf"]),
-            "-pix_fmt", "yuv420p",
-            "-an",  # no audio
-            # fragmented mp4: file stays playable even if the PC crashes mid-game
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-            str(self.path) + ".part",
-        ]
+        ext = self.cfg["container"]
+        self.path = out_dir / f"minecraft_{datetime.now():%Y-%m-%d_%H-%M-%S}.{ext}"
+        cmd = build_ffmpeg_cmd(self.cfg, str(self.path) + ".part")
         log.info("Starting recording: %s", self.path)
         self.proc = subprocess.Popen(
             cmd,
@@ -156,7 +230,10 @@ def upload_pending(cfg):
         if not out_dir.exists():
             return
         dest = f"{cfg['rclone_remote']}:{cfg['drive_folder']}"
-        for f in sorted(out_dir.glob("minecraft_*.mp4")):
+        if not cfg["upload_enabled"]:
+            return
+        files = [f for ext in CONTAINERS for f in out_dir.glob(f"minecraft_*.{ext}")]
+        for f in sorted(files):
             log.info("Uploading %s -> %s", f.name, dest)
             r = subprocess.run(
                 [cfg["rclone_path"], "copy", str(f), dest, "--retries", "5"],
@@ -188,6 +265,8 @@ def main():
                 game = find_minecraft()
                 if game is not None:
                     log.info("Minecraft detected (pid %s)", game.pid)
+                    cfg = load_config()  # pick up changes from the settings window
+                    rec.cfg = cfg
                     rec.start()
             elif not game.is_running():
                 log.info("Minecraft closed")
