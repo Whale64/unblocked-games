@@ -47,21 +47,56 @@ ${NOISE}
 void main() {
 	vec2 uv = vUv;
 	vec3 col = vec3(0.5); float h = 0.5;
-	if (uLayer == 0) { // grass: crossing blades, clumps, dry tips, soil gaps
-		float base = fbm(uv, vec2(6.0), 5, 0.55);
-		vec3 cl = vor(uv, 22.0);
-		float b1 = gn(vec2(uv.x * 160.0, uv.y * 14.0), vec2(160.0, 14.0));
-		float b2 = gn(vec2(uv.x * 14.0, uv.y * 170.0), vec2(14.0, 170.0));
-		float b3 = gn(uv * 90.0 + vec2(b1, b2) * 2.0, vec2(90.0));
-		float blades = pow(max(max(b1, b2), b3 * 0.9), 2.2);
-		float gap = smoothstep(0.32, 0.12, blades + base * 0.3);
-		vec3 dark = vec3(0.035, 0.07, 0.016), mid = vec3(0.09, 0.16, 0.035), light = vec3(0.17, 0.24, 0.06), dry = vec3(0.30, 0.27, 0.12);
-		col = mix(dark, mid, blades);
-		col = mix(col, light, smoothstep(0.55, 0.95, blades) * (0.6 + 0.4 * cl.z));
-		col = mix(col, dry, smoothstep(0.62, 0.9, base) * 0.55 * smoothstep(0.3, 0.8, blades));
-		col *= 0.85 + 0.3 * cl.z;
-		col = mix(col, vec3(0.07, 0.05, 0.03), gap * 0.7);
-		h = blades * 0.7 + base * 0.3;
+	if (uLayer == 0) { // grass: hundreds of randomly oriented tapered blades over thatch, soil and clover
+		float lush = fbm(uv + 0.31, vec2(3.0), 4, 0.5);
+		float base = fbm(uv, vec2(9.0), 5, 0.55);
+		// background: dead thatch and soil showing through
+		col = mix(vec3(0.045, 0.040, 0.020), vec3(0.11, 0.095, 0.05), base);
+		float thatch = pow(gn(uv * 70.0 + base * 3.0, vec2(70.0)), 3.0);
+		col = mix(col, vec3(0.20, 0.17, 0.09), thatch * 0.6);
+		h = base * 0.15;
+		// clover / weed patches
+		float clov = smoothstep(0.58, 0.68, fbm(uv + 7.3, vec2(5.0), 4, 0.5));
+		if (clov > 0.0) {
+			vec3 lv = vor(uv, 90.0);
+			float leaf = smoothstep(0.45, 0.3, lv.x) * clov;
+			col = mix(col, mix(vec3(0.05, 0.10, 0.035), vec3(0.09, 0.15, 0.05), lv.z), leaf);
+			h = max(h, leaf * (0.45 - lv.x) * 1.4 + 0.2 * leaf);
+		}
+		// three layers of blades, each cell holding two blades with random direction, length and tint
+		for (int L = 0; L < 3; L++) {
+			float F = L == 0 ? 48.0 : (L == 1 ? 72.0 : 104.0);
+			vec2 p = uv * F, ci = floor(p), cf = fract(p);
+			for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+				vec2 g = vec2(x, y);
+				vec2 cell = mod(ci + g, F);
+				for (int k = 0; k < 2; k++) {
+					float kk = float(k) * 7.13 + float(L) * 3.7;
+					vec2 r = h22(cell + kk);
+					float r3 = h21(cell * 1.7 + kk + 11.0);
+					float ang = r3 * 6.2831853;
+					vec2 dir = vec2(cos(ang), sin(ang)), perp = vec2(-dir.y, dir.x);
+					vec2 loc = cf - (g + r);
+					float len = 0.9 + 1.1 * h21(cell + kk + 5.0);
+					float t = dot(loc, dir) / len;
+					if (t < 0.0 || t > 1.0) continue;
+					float across = dot(loc, perp);
+					float w = (0.075 + 0.04 * r.x) * (1.0 - t * 0.85) * (1.0 + 0.4 * float(2 - L) * 0.5);
+					float a = abs(across) / w;
+					if (a > 1.0) continue;
+					float hb = 0.3 + float(L) * 0.2 + t * 0.25 + r.y * 0.1 + (1.0 - a * a) * 0.08;
+					if (hb <= h) continue;
+					h = hb;
+					float dryB = step(0.9, h21(cell + kk + 23.0)) + lush * 0.15;
+					vec3 g0 = mix(vec3(0.07, 0.13, 0.03), vec3(0.13, 0.20, 0.05), r.x);
+					g0 = mix(g0, vec3(0.05, 0.11, 0.04), r.y * 0.5);
+					g0 = mix(g0, vec3(0.26, 0.23, 0.10), clamp(dryB, 0.0, 1.0) * 0.7);
+					g0 *= 0.65 + 0.55 * t; // darker at the base, catching light toward the tip
+					g0 *= 1.0 - 0.25 * a * a; // rounded blade, darker at the edges
+					col = g0 * (0.8 + 0.4 * lush);
+				}
+			}
+		}
 	} else if (uLayer == 1) { // dry soil with pebbles and sparse straw
 		float base = fbm(uv, vec2(5.0), 6, 0.55);
 		vec3 pv = vor(uv, 36.0);

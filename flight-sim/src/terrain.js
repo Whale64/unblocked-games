@@ -90,6 +90,7 @@ vec3 tN = vec3(0.0, 1.0, 0.0);
 float tCloudShadow = 1.0;
 float tWaterMask = 0.0;
 float tDetAO = 1.0;
+float tGrass = 0.0;
 vec2 gX, gY; // world-xz screen derivatives (computed in uniform control flow)
 vec4 sA(vec3 p, vec2 dx, vec2 dy) { vec4 s = textureGrad(tLayA, p, dx, dy); s.rgb *= s.rgb; return s; }
 vec4 sN(vec3 p, vec2 dx, vec2 dy) { return textureGrad(tLayN, p, dx, dy); }
@@ -187,9 +188,37 @@ void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa, vec4 a
 		if (pav <= 0.0) continue;
 
 		vec3 pc = mix(asphalt * 1.5, asphalt, mainR);
+		// paving lanes laid along the runway, each with its own age / tone, and the joints between them
+		float laneW = 4.6;
+		float lane = floor((v + hw) / laneW), seg = floor((u + hl) / 140.0);
+		pc *= mix(1.0, 0.84 + 0.32 * th12(vec2(lane, seg * 0.37 + float(i) * 11.0)), mainR);
+		float lj = abs(fract((v + hw) / laneW) - 0.5) * laneW;
+		pc *= 1.0 - 0.18 * mainR * smoothstep(0.16 + aa, 0.04, laneW * 0.5 - lj);
+		// repair patches of fresher, darker asphalt
+		vec2 pcell = floor(vec2(u / 26.0, v / 9.0));
+		float ph = th12(pcell + float(i) * 7.0);
+		if (ph > 0.86) {
+			vec2 pf = fract(vec2(u / 26.0, v / 9.0));
+			vec2 lo = vec2(0.1 + 0.2 * th12(pcell + 1.3), 0.1 + 0.2 * th12(pcell + 2.9)), hi = lo + vec2(0.45, 0.5);
+			float pm = rectAA(pf, lo, hi, aa / 9.0);
+			pc = mix(pc, pc * 0.62, pm * mainR);
+		}
+		// sealed cracks: thin meandering dark lines
+		float ck = abs(vnoise(wp.xz * 0.09 + vec2(float(i) * 3.1)) - 0.5);
+		float ck2 = abs(vnoise(wp.xz * 0.21 + 7.7) - 0.5);
+		float crack = max(smoothstep(0.012 + aa * 0.09, 0.0, ck), smoothstep(0.008 + aa * 0.2, 0.0, ck2) * 0.7);
+		crack *= step(0.45, vnoise(wp.xz * 0.013 + 1.7)) * texF;
+		pc = mix(pc, vec3(0.012, 0.012, 0.013), crack * pav * 0.85);
 		float sEnd = hl - abs(u);
-		float skid = mainR * smoothstep(9.0, 2.0, abs(abs(v) - 3.5)) * smoothstep(180.0, 320.0, sEnd) * smoothstep(1000.0, 650.0, sEnd);
-		pc *= 1.0 - 0.6 * skid * (0.4 + 0.6 * vnoise(vec2(u * 0.02, v * 2.0)));
+		// rubber deposits in the touchdown zone: streaky, densest along the main-gear tracks
+		float tdz = smoothstep(120.0, 320.0, sEnd) * smoothstep(1100.0, 600.0, sEnd);
+		float tracks = max(smoothstep(9.0, 1.5, abs(abs(v) - 3.5)), smoothstep(6.0, 0.0, abs(v)) * 0.6);
+		float streak = 0.35 + 0.65 * vnoise(vec2(u * 0.015, v * 2.2)) * vnoise(vec2(u * 0.11, v * 0.9));
+		float skid = mainR * tracks * tdz * streak;
+		pc *= 1.0 - 0.75 * skid;
+		// polished wheel paths along the whole runway and a lighter, sun-bleached shoulder
+		pc *= 1.0 - 0.1 * mainR * smoothstep(10.0, 3.0, abs(v));
+		rough = mix(rough, rough - 0.12 * skid, pav);
 		pc = mix(pc, asphalt * 1.25, taxi * (1.0 - mainR));
 		vec2 slab = abs(fract(uv / vec2(7.5, 7.5)) - 0.5) * 7.5;
 		float joint = 1.0 - 0.25 * smoothstep(0.12 + aa, 0.0, 3.75 - max(slab.x, slab.y));
@@ -223,6 +252,8 @@ void airportSurface(vec3 wp, inout vec3 col, inout float rough, float aa, vec4 a
 		yellow = max(yellow, max(max(tcl, hold), max(stand, apronEdge)) * (1.0 - mainR));
 		col = mix(col, pc, pav);
 		pavOut = max(pavOut, pav);
+		float wear = 0.55 + 0.45 * smoothstep(0.25, 0.6, vnoise(wp.xz * 1.7 + 4.0));
+		white *= mix(1.0, wear, texF) * (1.0 - 0.6 * skid);
 		col = mix(col, vec3(0.62, 0.62, 0.6) * mix(1.0, 0.75 + 0.5 * aspT.a, texF), white);
 		col = mix(col, vec3(0.55, 0.38, 0.04), yellow);
 		rough = mix(rough, mix(0.75, 0.55, max(white, yellow)), pav);
@@ -423,12 +454,15 @@ void terrainShade(inout vec3 col) {
 		tWaterMask = water * (1.0 - foam);
 		tDetAO = mix(tDetAO, 1.0, water);
 	}
+	// where 3D grass grows (read back by the grass map pass)
+	tGrass = (1.0 - water) * (1.0 - road) * (1.0 - smoothstep(0.0, 0.2, pav)) * (1.0 - rockW) * (1.0 - snow) * (1.0 - beach)
+		* (1.0 - plowed) * (1.0 - urban * 0.85) * (1.0 - forest * 0.35) * smoothstep(0.5, 0.35, slope);
 	tCloudShadow = wlCloudShadow(wp);
 	col = c;
 }
 `;
 
-function createTerrainMaterial(macroTex, cloudTex, layers) {
+function createTerrainMaterial(macroTex, cloudTex, layers, mapPass = false) {
 	const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
 	worldUniforms.tWeather.value = cloudTex.weather;
 	const uniforms = {
@@ -440,6 +474,7 @@ function createTerrainMaterial(macroTex, cloudTex, layers) {
 		uRwyA: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
 		uRwyB: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
 		uRwyCount: { value: 0 },
+		uGrassEye: { value: new THREE.Vector3() },
 	};
 	airports.slice(0, 3).forEach((ap, i) => {
 		uniforms.uRwyA.value[i].set(ap.x, ap.z, ap.hdRad, ap.length);
@@ -452,14 +487,21 @@ function createTerrainMaterial(macroTex, cloudTex, layers) {
 		shader.vertexShader = shader.vertexShader
 			.replace('#include <common>', '#include <common>\nattribute float aWater;\nvarying vec3 vWPos;\nvarying vec3 vWNormal;\nvarying float vWater;')
 			.replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNormal = normalize(mat3(modelMatrix) * objectNormal);\nvWater = aWater;');
+		// map pass: distance-dependent detail is evaluated from the real eye, and the output is
+		// (height, grass density, packed sqrt-albedo) instead of a lit colour
+		const pre = mapPass ? 'uniform vec3 uGrassEye;\n#define cameraPosition uGrassEye\n' : '';
 		shader.fragmentShader = shader.fragmentShader
-			.replace('#include <common>', '#include <common>\n' + WORLD_LIGHT_GLSL + ROAD_GLSL + TERRAIN_PARS)
+			.replace('#include <common>', '#include <common>\n' + pre + WORLD_LIGHT_GLSL + ROAD_GLSL + TERRAIN_PARS)
+			.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n' + (mapPass
+				? '{ vec3 sa = floor(sqrt(clamp(diffuseColor.rgb, 0.0, 1.0)) * 255.0 + 0.5); gl_FragColor = vec4(vWPos.y, tGrass, sa.r * 65536.0 + sa.g * 256.0 + sa.b, 1.0); }'
+				: ''))
 			.replace('#include <color_fragment>', '#include <color_fragment>\nterrainShade(diffuseColor.rgb);')
 			.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = tRough;')
 			.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize((viewMatrix * vec4(tN, 0.0)).xyz);')
 			.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n{ vec2 wlt = wlTerrain(vWPos); float sh = tCloudShadow * wlt.x;\nreflectedLight.directDiffuse *= sh;\nreflectedLight.directSpecular *= sh;\nreflectedLight.indirectDiffuse *= wlt.y * tDetAO;\nreflectedLight.indirectSpecular *= mix(1.0, 0.5 + 0.5 * sh, tWaterMask) * mix(0.55, 1.0, wlt.y * tDetAO); }');
 	};
-	mat.customProgramCacheKey = () => 'terrain-v2';
+	mat.customProgramCacheKey = () => 'terrain-v2' + (mapPass ? '-map' : '');
+	mat.userData.args = [macroTex, cloudTex, layers];
 	return mat;
 }
 
@@ -700,7 +742,17 @@ float ln3(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f)
 	           mix(mix(lh(i + vec3(0,0,1)), lh(i + vec3(1,0,1)), f.x), mix(lh(i + vec3(0,1,1)), lh(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
 			.replace('#include <color_fragment>', `#include <color_fragment>
 	float leafN = ln3(vLeafP * 1.6) * 0.6 + ln3(vLeafP * 4.1) * 0.4;
-	diffuseColor.rgb *= 0.7 + 0.6 * leafN;`)
+	float isLeaf = step(vColor.r * 1.25, vColor.g);
+	// leaf clusters: small bright clumps with dark gaps between them
+	float clus = ln3(vLeafP * 7.5);
+	diffuseColor.rgb *= mix(1.0, 0.55 + 0.9 * smoothstep(0.25, 0.8, clus), isLeaf * 0.8);
+	diffuseColor.rgb *= 0.7 + 0.6 * leafN;
+	// ragged, see-through crown edges instead of smooth blobs
+	{
+		float edge = 1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition)));
+		float cut = clus * 0.65 + ln3(vLeafP * 15.0) * 0.35;
+		if (isLeaf > 0.5 && cut < edge * 0.95 - 0.25) discard;
+	}`)
 			.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
 	vec3 lp = vLeafP * 2.3;
 	vec3 lg = vec3(ln3(lp + vec3(0.3, 0.0, 0.0)) - ln3(lp - vec3(0.3, 0.0, 0.0)), ln3(lp + vec3(0.0, 0.3, 0.0)) - ln3(lp - vec3(0.0, 0.3, 0.0)), ln3(lp + vec3(0.0, 0.0, 0.3)) - ln3(lp - vec3(0.0, 0.0, 0.3)));
@@ -742,6 +794,13 @@ export class Terrain {
 		scene.add(this.treeGroup);
 		this.treeCells = new Map();
 		this.setQuality(quality);
+	}
+
+	createGrassMapMaterial() {
+		const m = createTerrainMaterial(...this.material.userData.args, true);
+		// share the runway uniforms etc. with the main material
+		for (const k of Object.keys(this.uniforms)) if (k !== 'uGrassEye') m.userData.uniforms[k] = this.uniforms[k];
+		return m;
 	}
 
 	setQuality(q) {

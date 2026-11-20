@@ -18,14 +18,15 @@ import { HeightField, patchWorldLighting } from './worldlight.js';
 import { DevicesUI } from './devices-ui.js';
 import { initSettlements, towns, roads } from './settlements.js';
 import { CityLife } from './citylife.js';
+import { Grass } from './grass.js';
 import { Autopilot } from './autopilot.js';
 import { LandingChallenge, RingCourse, LANDING_LEVELS, loadBests, fmtTime } from './challenges.js';
 
 const QUALITY = {
-	low: { pixelRatio: 0.75, msaa: 0, cloudScale: 0.35, cloudSteps: 20, bloom: false, godRays: false, shadows: 0, terrainN: 24, terrainSplit: 1.6, terrainMaxLevel: 6, treeRadius: 1500, treeNear: 450, treeDensity: 0.5, treeShadows: false, texSize: 256, cityRange: 8000, traffic: 0.4 },
-	medium: { pixelRatio: 1, msaa: 2, cloudScale: 0.42, cloudSteps: 30, bloom: true, godRays: true, shadows: 1024, terrainN: 32, terrainSplit: 1.9, terrainMaxLevel: 6, treeRadius: 2600, treeNear: 700, treeDensity: 0.75, treeShadows: false, texSize: 512, cityRange: 12000, traffic: 0.7 },
-	high: { pixelRatio: 1.5, msaa: 4, cloudScale: 0.5, cloudSteps: 42, bloom: true, godRays: true, shadows: 2048, terrainN: 32, terrainSplit: 2.3, terrainMaxLevel: 7, treeRadius: 3600, treeNear: 1000, treeDensity: 1.0, treeShadows: true, texSize: 512, cityRange: 16000, traffic: 1 },
-	ultra: { pixelRatio: 2, msaa: 4, cloudScale: 0.6, cloudSteps: 64, bloom: true, godRays: true, shadows: 4096, terrainN: 48, terrainSplit: 2.7, terrainMaxLevel: 7, treeRadius: 5000, treeNear: 1400, treeDensity: 1.3, treeShadows: true, texSize: 1024, cityRange: 22000, traffic: 1.3 },
+	low: { pixelRatio: 0.75, msaa: 0, cloudScale: 0.35, cloudSteps: 20, bloom: false, godRays: false, shadows: 0, terrainN: 24, terrainSplit: 1.6, terrainMaxLevel: 6, treeRadius: 1500, treeNear: 450, treeDensity: 0.5, treeShadows: false, texSize: 256, cityRange: 8000, traffic: 0.4, grass: 0 },
+	medium: { pixelRatio: 1, msaa: 2, cloudScale: 0.42, cloudSteps: 30, bloom: true, godRays: true, shadows: 1024, terrainN: 32, terrainSplit: 1.9, terrainMaxLevel: 6, treeRadius: 2600, treeNear: 700, treeDensity: 0.75, treeShadows: false, texSize: 512, cityRange: 12000, traffic: 0.7, grass: 1 },
+	high: { pixelRatio: 1.5, msaa: 4, cloudScale: 0.5, cloudSteps: 42, bloom: true, godRays: true, shadows: 2048, terrainN: 32, terrainSplit: 2.3, terrainMaxLevel: 7, treeRadius: 3600, treeNear: 1000, treeDensity: 1.0, treeShadows: true, texSize: 512, cityRange: 16000, traffic: 1, grass: 2 },
+	ultra: { pixelRatio: 2, msaa: 4, cloudScale: 0.6, cloudSteps: 64, bloom: true, godRays: true, shadows: 4096, terrainN: 48, terrainSplit: 2.7, terrainMaxLevel: 7, treeRadius: 5000, treeNear: 1400, treeDensity: 1.3, treeShadows: true, texSize: 1024, cityRange: 22000, traffic: 1.3, grass: 2 },
 };
 const WEATHER = {
 	clear: { coverage: 0, base: 1500, top: 2600, density: 0.03, haze: 3.6e-5, cirrus: 0.25 },
@@ -129,6 +130,7 @@ class Game {
 
 		await progress(0.45, 'Synthesising PBR terrain textures, planting forests…');
 		this.terrain = new Terrain(this.scene, this.cloudTex, q, renderer);
+		this.grass = new Grass(renderer, this.scene, this.terrain, q);
 		this.city = new CityLife(this.scene, q);
 		Object.assign(this.terrain.uniforms, this.city.uniforms);
 		this.heightField = new HeightField(renderer);
@@ -352,6 +354,7 @@ class Game {
 			this.quality = q;
 			this.post.setQuality(q);
 			this.terrain.setQuality(q);
+			this.grass.setQuality(q);
 			this.sun.castShadow = q.shadows > 0;
 			if (q.shadows) { this.sun.shadow.mapSize.set(q.shadows, q.shadows); if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; } }
 			this.resize();
@@ -1037,6 +1040,7 @@ class Game {
 		this.terrain.update(this.camera.position, 4);
 		this.heightField.update(this.camera.position, this.atm.lightDir);
 		const camAgl = this.camera.position.y - Math.max(getHeight(this.camera.position.x, this.camera.position.z), 0);
+		this.grass.update(dt, this.camera.position, camAgl, this.time, this.fm && this.state === 'flying' ? this.fm.windBase : null);
 		this.city.update(this.paused ? 0 : dt, this.camera.position, camAgl, this.atm.night, this.camera, this.pxHeight);
 		const windV = this.fm ? this.fm.windBase : new THREE.Vector3();
 		const lightCol = new THREE.Color().copy(this.atm.lightColor).multiplyScalar(this.atm.lightIntensity * Math.max(this.atm.lightDir.y, 0.05) * 0.25 * this.cloudShadow).add(new THREE.Color(0.25, 0.3, 0.38).multiplyScalar(SUN_INTENSITY * 0.05 * sstep(this.atm.sunDir.y, -0.1, 0.3) + 0.01));
