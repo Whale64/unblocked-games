@@ -67,7 +67,7 @@ function detectQuality() {
 }
 
 function loadSettings() {
-	const def = { aircraft: 'sparrow', spawn: 'runway', time: 9.5, weather: 'scattered', windSpeed: 8, windDir: 120, turbulence: 0.3, quality: null, invert: false, assist: true, mouseYoke: false, timeFlow: false, volume: 0.8, depthMode: 'auto', mode: 'free', level: 'crosswind' };
+	const def = { aircraft: 'sparrow', spawn: 'runway', time: 9.5, weather: 'scattered', windSpeed: 8, windDir: 120, turbulence: 0.3, quality: null, invert: false, assist: true, mouseYoke: false, timeFlow: false, volume: 0.8, depthMode: 'auto', resMode: 'auto', mode: 'free', level: 'crosswind' };
 	let s = def;
 	try { s = { ...def, ...JSON.parse(localStorage.getItem('skyward-settings') || '{}') }; } catch { /* storage unavailable */ }
 	if (!s.quality || !QUALITY[s.quality]) s.quality = detectQuality();
@@ -253,7 +253,16 @@ class Game {
 
 	resize() {
 		const w = window.innerWidth, h = window.innerHeight;
-		const pr = Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.quality.pixelRatio) * (this.resScale || 1));
+		// render pixel ratio: auto = quality preset x dynamic scale; native = every screen pixel;
+		// a number = fixed render height (e.g. 1080), up to 2x supersampling
+		const dpr = window.devicePixelRatio || 1, mode = this.settings.resMode || 'auto';
+		let pr;
+		if (mode === 'native') pr = dpr;
+		else if (/^\d+$/.test(mode)) pr = Math.min(+mode / h, dpr * 2);
+		else pr = Math.min(dpr, this.quality.pixelRatio) * (this.resScale || 1);
+		pr = Math.max(0.25, pr);
+		this.resText = `${Math.round(w * pr)}×${Math.round(h * pr)}`;
+		if ($('res-label')) $('res-label').textContent = this.resText;
 		this.renderer.setPixelRatio(pr);
 		this.renderer.setSize(w, h, false);
 		$('gl').style.width = w + 'px'; $('gl').style.height = h + 'px';
@@ -301,6 +310,7 @@ class Game {
 		bind('time-flow', 'timeFlow');
 		bind('volume', 'volume', parseFloat, () => this.audio.setVolume(s.volume));
 		bind('depth-mode', 'depthMode', String, () => { saveSettings(s); location.reload(); });
+		bind('res-mode', 'resMode', String, () => { this.resScale = 1; this.frameTimes = []; this.resize(); saveSettings(s); });
 		this.updateMenuLabels();
 		$('fly').onclick = () => this.startFlight();
 		$('resume').onclick = () => this.togglePause(false);
@@ -979,17 +989,38 @@ class Game {
 	}
 
 	// Dynamic resolution: keep the frame rate playable on weaker GPUs.
+	// Dynamic resolution: lowers the render scale only when the frame rate is *consistently* low.
+	// Uses the median frame time of the last ~2 s (hitches, tab switches and shader compiles are ignored),
+	// never goes below 75 % and restores full resolution as soon as there is headroom.
 	adaptResolution(dt) {
-		if (this.state !== 'flying' || this.paused) return;
 		this.resScale = this.resScale || 1;
+		const ft = this.frameTimes || (this.frameTimes = []);
+		if (this.state !== 'flying' || this.paused) { ft.length = 0; return; }
+		if (this.settings.resMode && this.settings.resMode !== 'auto') {
+			if (this.resScale !== 1) { this.resScale = 1; this.resize(); }
+			return;
+		}
+		if (dt > 0 && dt < 0.095) ft.push(dt);
+		if (ft.length > 150) ft.shift();
 		this.resTimer = (this.resTimer || 0) + dt;
-		if (this.resTimer < 2.5) return;
-		const fps = this.hud.fps;
+		if (this.resTimer < 3 || ft.length < 100) return;
+		const sorted = [...ft].sort((a, b) => a - b);
+		const fps = 1 / sorted[Math.floor(sorted.length * 0.5)];
+		const best = 1 / sorted[Math.floor(sorted.length * 0.1)];
+		// display refresh estimate (60, 120, 144 ...), decays slowly so it can follow a change of monitor
+		this.refreshFps = Math.max((this.refreshFps || 60) * 0.995, Math.min(best, 240));
 		let next = this.resScale;
-		if (fps < 30 && this.resScale > 0.55) next = Math.max(0.55, this.resScale - 0.12);
-		else if (fps > 57 && this.resScale < 1) next = Math.min(1, this.resScale + 0.08);
-		if (next !== this.resScale) { this.resScale = next; this.resTimer = 0; this.resize(); }
-		else this.resTimer = 1.5;
+		if (fps < 26 && this.resScale > 0.75) next = Math.max(0.75, this.resScale - 0.1);
+		else if (fps > Math.min(50, this.refreshFps * 0.85) && this.resScale < 1) next = Math.min(1, this.resScale + 0.125);
+		if (next !== this.resScale) {
+			const lower = next < this.resScale;
+			this.resScale = next;
+			this.resize();
+			// the resize itself reallocates render targets: don't let that hitch count as slowness
+			ft.length = 0;
+			this.resTimer = 0;
+			if (lower && !this.resNoticeShown) { this.resNoticeShown = true; this.hud.toast('Resolution lowered to keep the frame rate (set a fixed Resolution in the menu)', '#cfe8ff', 4); }
+		} else this.resTimer = 2;
 	}
 
 	renderFrame(dt) {
@@ -1127,7 +1158,7 @@ class Game {
 			}
 			this.hud.draw(fm.crashed || this.view === 'cabin' ? null : tel, {
 				challenge, mapMarks,
-				dt, fov: this.camera.fov, cfg: this.cfg, throttle: this.controls.throttle, time: this.time, paused: this.paused,
+				dt, fov: this.camera.fov, cfg: this.cfg, throttle: this.controls.throttle, time: this.time, paused: this.paused, res: this.resText,
 				velBody, accelAlong: this.accelAlong, pos: fm.pos, approach: (this.lastApproach = computeApproach(fm.pos, tel.heading)),
 				minimal: this.view === 'cockpit' && (this.cfg.category === 'airliner' || this.cfg.engine === 'prop'),
 				navBearing: brg, navText: `${ap.id} ${String(Math.round(brg)).padStart(3, '0')}° ${(dist / 1852).toFixed(1)} NM`,

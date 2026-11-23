@@ -73,7 +73,7 @@ export class HUD {
 		g.restore();
 		if (opts.challenge) this.drawChallenge(opts.challenge, s);
 		// fps / clock
-		this.text(`${Math.round(this.fps)} FPS  ${opts.clock}`, w - 10, 12, 11, 'rgba(255,255,255,0.65)', 'right', 'middle', '500');
+		this.text(`${opts.res ? opts.res + '  ' : ''}${Math.round(this.fps)} FPS  ${opts.clock}`, w - 10, 12, 11, 'rgba(255,255,255,0.65)', 'right', 'middle', '500');
 	}
 
 	// game-mode panel (top left) and a marker on the next target
