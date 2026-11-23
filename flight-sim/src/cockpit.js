@@ -426,8 +426,8 @@ export function buildAirlinerDeck(cfg, withAvionics = true) {
 		const bf = f.ob, br = V(cx + s * 1.06, yb - 0.05, 0.52), tf = f.ot, tr = V(cx + s * 0.87, yt + 0.06, 0.52);
 		root.add(patchFrame(bf, br, tf, tr, [winPath(0.04, 0.09, 0.47, 0.88, 0.07, 0.1), winPath(0.55, 0.2, 0.8, 0.8, 0.06)], thick, frameMat));
 		// window crank / latch handle on the sliding window
-		const hp = bf.clone().lerp(br, 0.3).lerp(tf.clone().lerp(tr, 0.3), 0.45).add(V(-s * 0.03, 0, 0));
-		add(root, rbox(0.03, 0.12, 0.03, 0.01), blackMat, hp.x, hp.y, hp.z);
+		const hp = bf.clone().lerp(br, 0.42).lerp(tf.clone().lerp(tr, 0.42), 0.12).add(V(-s * 0.02, 0, 0));
+		add(root, rbox(0.02, 0.07, 0.02, 0.008), blackMat, hp.x, hp.y, hp.z);
 		// wall down to the floor
 		root.add(quad(V(cx + s * 0.97, -1.22, -0.84), V(cx + s * 1.02, -1.22, 0.52), bf, br, wallMat));
 		// ceiling strip to the overhead panel
@@ -446,7 +446,7 @@ export function buildAirlinerDeck(cfg, withAvionics = true) {
 	}
 	// sun visors (folded up) and the standby compass on the centre post
 	const visorMat = imat(0x2a2d22, 0.4, 0, { transparent: true, opacity: 0.85 });
-	for (const s of [-1, 1]) add(root, rbox(0.42, 0.18, 0.012, 0.005), visorMat, cx + s * 0.5, yt - 0.06, -0.6, -0.95);
+	for (const s of [-1, 1]) add(root, rbox(0.4, 0.16, 0.01, 0.005), visorMat, cx + s * 0.5, yt + 0.025, -0.5, -1.38);
 	add(root, rbox(0.07, 0.06, 0.06, 0.01), blackMat, cx, yt - 0.05, -0.66);
 
 	// ---------------------------------------------------------- overhead panel
