@@ -192,30 +192,61 @@ function glassPatch(c00, c10, c01, c11) {
 	return m;
 }
 
-// Simple seated human (first officer / passengers).
+// Seated human facing -z (first officer / passengers). Proportions for a seated adult.
 function person(shirt, trousers, skin, hair, opts = {}) {
 	const g = new THREE.Group();
-	const sh = imat(shirt, 0.85), tr = imat(trousers, 0.85), sk = imat(skin, 0.6), hr = imat(hair, 0.9);
-	add(g, new THREE.CapsuleGeometry(0.17, 0.3, 4, 10), sh, 0, 0.42, 0.02).scale.set(1, 1, 0.72); // torso
-	add(g, new THREE.SphereGeometry(0.1, 16, 12), sk, 0, 0.83, -0.02).scale.set(0.88, 1.08, 1); // head
-	const hairM = add(g, new THREE.SphereGeometry(0.104, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), hr, 0, 0.845, 0.005);
-	hairM.scale.set(0.9, 1.08, 1.02);
-	add(g, new THREE.CylinderGeometry(0.045, 0.05, 0.08, 10), sk, 0, 0.7, -0.01); // neck
+	const sh = imat(shirt, 0.85), tr = imat(trousers, 0.85), sk = imat(skin, 0.55), hr = imat(hair, 0.9);
+	const limb = (mat, r, a, b) => {
+		// capsule between two points
+		const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);
+		const len = A.distanceTo(B);
+		const m = add(g, new THREE.CapsuleGeometry(r, Math.max(0.01, len - r * 2 + r), 4, 10), mat);
+		m.position.copy(A).add(B).multiplyScalar(0.5);
+		m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
+		return m;
+	};
+	// torso (slightly reclined), shoulders, hips
+	const torso = add(g, new THREE.CapsuleGeometry(0.15, 0.32, 6, 14), sh, 0, 0.44, 0.03, -0.1);
+	torso.scale.set(1.05, 1, 0.68);
+	add(g, rbox(0.38, 0.12, 0.22, 0.05, 3), sh, 0, 0.62, 0.04, -0.1);
+	add(g, rbox(0.34, 0.14, 0.26, 0.06, 3), tr, 0, 0.12, 0.02);
+	// neck, head, hair, ears, nose
+	add(g, new THREE.CylinderGeometry(0.048, 0.055, 0.1, 12), sk, 0, 0.72, 0.03);
+	const head = add(g, new THREE.SphereGeometry(0.1, 20, 16), sk, 0, 0.86, 0.01);
+	head.scale.set(0.82, 1.1, 0.95);
+	const hc = add(g, new THREE.SphereGeometry(0.104, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.52), hr, 0, 0.875, 0.025, -0.25);
+	hc.scale.set(0.86, 1.08, 1.0);
+	for (const s of [-1, 1]) add(g, new THREE.SphereGeometry(0.022, 8, 6), sk, s * 0.083, 0.855, 0.02).scale.set(0.5, 1, 0.8);
+	add(g, new THREE.ConeGeometry(0.014, 0.035, 8), sk, 0, 0.855, -0.088, -Math.PI / 2);
+	// collar and tie
+	if (opts.tie) {
+		add(g, new THREE.ConeGeometry(0.03, 0.26, 4), imat(opts.tie, 0.6), 0, 0.53, -0.075, Math.PI + 0.1).scale.set(1, 1, 0.3);
+		for (const s of [-1, 1]) add(g, new THREE.BoxGeometry(0.05, 0.03, 0.01), sh, s * 0.03, 0.68, -0.055, 0.2, 0, s * 0.5);
+	}
+	// legs: thighs forward, shins down to the floor
 	for (const s of [-1, 1]) {
-		add(g, new THREE.CapsuleGeometry(0.07, 0.3, 4, 8), tr, s * 0.1, 0.12, -0.2, Math.PI / 2 - 0.1); // thigh
-		add(g, new THREE.CapsuleGeometry(0.055, 0.34, 4, 8), tr, s * 0.1, -0.15, -0.4, 0.15); // shin
-		const arm = add(g, new THREE.CapsuleGeometry(0.05, 0.26, 4, 8), sh, s * 0.22, 0.42, -0.06, opts.armsForward ? -0.7 : -0.25, 0, s * 0.12);
-		arm.userData.arm = true;
-		add(g, new THREE.CapsuleGeometry(0.042, 0.22, 4, 8), opts.shortSleeve ? sk : sh, s * 0.24, opts.armsForward ? 0.22 : 0.2, opts.armsForward ? -0.3 : -0.22, Math.PI / 2 - 0.15);
+		limb(tr, 0.072, [s * 0.1, 0.12, 0.0], [s * 0.11, 0.15, -0.42]);
+		limb(tr, 0.058, [s * 0.11, 0.15, -0.42], [s * 0.12, -0.3, -0.5]);
+		add(g, rbox(0.1, 0.07, 0.26, 0.03), imat(0x111111, 0.5), s * 0.12, -0.33, -0.58);
+	}
+	// arms: upper arms down the sides, forearms forward to the lap / controls, hands
+	const pose = opts.pose || 'lap';
+	for (const s of [-1, 1]) {
+		const shoulder = [s * 0.19, 0.6, 0.05], elbow = [s * 0.22, 0.34, -0.02];
+		const hand = pose === 'controls' ? [s * 0.2, 0.32, -0.36] : pose === 'armrest' ? [s * 0.24, 0.26, -0.3] : [s * 0.12, 0.2, -0.3];
+		limb(sh, 0.052, shoulder, elbow);
+		limb(opts.shortSleeve ? sk : sh, 0.044, elbow, hand);
+		add(g, new THREE.SphereGeometry(0.038, 10, 8), sk, ...hand).scale.set(0.8, 0.6, 1.2);
 	}
 	if (opts.headset) {
 		const hs = imat(0x1a1c1e, 0.5);
-		add(g, new THREE.TorusGeometry(0.11, 0.012, 6, 20, Math.PI), hs, 0, 0.84, -0.01, 0, Math.PI / 2, 0);
-		for (const s of [-1, 1]) add(g, new THREE.CylinderGeometry(0.045, 0.045, 0.03, 14), hs, s * 0.1, 0.81, -0.01, 0, 0, Math.PI / 2);
+		add(g, new THREE.TorusGeometry(0.102, 0.011, 6, 20, Math.PI), hs, 0, 0.87, 0.01, 0, Math.PI / 2, 0);
+		for (const s of [-1, 1]) add(g, new THREE.CylinderGeometry(0.042, 0.042, 0.03, 14), hs, s * 0.092, 0.85, 0.02, 0, 0, Math.PI / 2);
+		add(g, new THREE.CylinderGeometry(0.004, 0.004, 0.12, 6), hs, -0.07, 0.82, -0.04, 0.3, 0, 1.1);
 	}
 	if (opts.epaulettes) {
 		const ep = imat(0x111111, 0.6), gold = imat(0xc9a43a, 0.35, 0.8);
-		for (const s of [-1, 1]) { add(g, new THREE.BoxGeometry(0.08, 0.012, 0.05), ep, s * 0.16, 0.64, 0.02); for (let k = 0; k < 3; k++) add(g, new THREE.BoxGeometry(0.075, 0.013, 0.005), gold, s * 0.16, 0.641, 0.0 + k * 0.012); }
+		for (const s of [-1, 1]) { add(g, new THREE.BoxGeometry(0.09, 0.012, 0.05), ep, s * 0.15, 0.685, 0.04); for (let k = 0; k < 3; k++) add(g, new THREE.BoxGeometry(0.012, 0.013, 0.048), gold, s * 0.15 + (k - 1) * 0.018, 0.686, 0.04); }
 	}
 	return g;
 }
@@ -259,8 +290,8 @@ export function buildAirlinerDeck(cfg, withAvionics = true) {
 	root.position.set(E[0], E[1], E[2]);
 	const glow = [];
 	const C = airbus
-		? { panel: '#5a6772', glare: '#2b3034', over: '#5f6b75', wall: '#9aa2a8', floor: '#2a2d32', seat: 0x2f343b, trim: '#3c434a', sheep: 0xbdb7aa }
-		: { panel: '#5c6065', glare: '#28292c', over: '#61656a', wall: '#a19f9a', floor: '#2d2a28', seat: 0x3b3431, trim: '#45484c', sheep: 0x8a7a68 };
+		? { panel: '#5a6772', glare: '#2b3034', over: '#5f6b75', wall: '#7c868e', floor: '#2a2d32', seat: 0x2f343b, trim: '#3c434a', sheep: 0xbdb7aa }
+		: { panel: '#5c6065', glare: '#28292c', over: '#61656a', wall: '#86847f', floor: '#2d2a28', seat: 0x3b3431, trim: '#45484c', sheep: 0x8a7a68 };
 	const plainPanel = imat(hex(C.panel), 0.65);
 	const plainGlare = imat(hex(C.glare), 0.9);
 	const trimMat = imat(hex(C.trim), 0.6);
@@ -270,7 +301,7 @@ export function buildAirlinerDeck(cfg, withAvionics = true) {
 		// fabric-like liner with faint quilting
 		for (let i = 0; i < 1200; i++) { P.g.fillStyle = `rgba(0,0,0,${P.r() * 0.05})`; P.g.fillRect(P.r() * 256, P.r() * 256, 2, 2); }
 	}, { rough: 0.95, side: THREE.DoubleSide });
-	const frameMat = imat(hex(C.wall), 0.75, 0, { side: THREE.DoubleSide });
+	const frameMat = imat(new THREE.Color(C.wall).multiplyScalar(0.8).getHex(), 0.7, 0, { side: THREE.DoubleSide });
 	const PX = 1004; // canvas pixels per metre on the main panel
 
 	// ---------------------------------------------------------- main instrument panel
@@ -593,7 +624,7 @@ export function buildAirlinerDeck(cfg, withAvionics = true) {
 		add(st, rbox(0.46, 0.6, 0.03, 0.03, 2), sheep, 0, 0.42, 0.17, -0.12);
 		root.add(st);
 	}
-	const fo = person(0xf1f2f4, 0x1b2230, 0xd9a888, 0x3a2a1e, { headset: true, epaulettes: true, armsForward: true });
+	const fo = person(0xb9c6d4, 0x1b2230, 0xd9a888, 0x3a2a1e, { headset: true, epaulettes: true, tie: 0x1a2440, pose: 'armrest' });
 	fo.position.set(2 * cx, -0.86, 0.12);
 	root.add(fo);
 
@@ -894,6 +925,13 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 	const z0 = seatZ - 7.5, z1 = seatZ + 3.5;
 	const wallCol = '#e9e7e2', binCol = '#f2f1ee';
 	const wallMat = imat(hex(wallCol), 0.8, 0, { side: THREE.DoubleSide });
+	// window-band lining: soft texture, panel seams at the edges, slightly darker reveal toward the window
+	const liner = paintedPanel(256, 256, wallCol, (P) => {
+		for (let i = 0; i < 900; i++) { P.g.fillStyle = `rgba(120,110,95,${P.r() * 0.05})`; P.g.fillRect(P.r() * 256, P.r() * 256, 2, 2); }
+		P.line(2, 0, 2, 256, 'rgba(0,0,0,0.18)', 3, false); P.line(254, 0, 254, 256, 'rgba(0,0,0,0.18)', 3, false);
+		const gr = P.g.createRadialGradient(128, 130, 40, 128, 130, 130); gr.addColorStop(0, 'rgba(0,0,0,0.12)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+		P.g.fillStyle = gr; P.g.fillRect(0, 0, 256, 256);
+	}, { rough: 0.8, seed: 50, side: THREE.DoubleSide });
 	const binMat = paintedPanel(512, 256, binCol, (P) => {
 		P.line(0, 4, 512, 4, 'rgba(0,0,0,0.25)', 3, false);
 		P.line(0, 250, 512, 250, 'rgba(0,0,0,0.3)', 3, false);
@@ -911,7 +949,7 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 			const xa = s * sideAt(yw0 - 0.05) * 0.985, xb = s * sideAt(yw1 + 0.05) * 0.985;
 			const c00 = V(xa, yw0, z + winPitch), c10 = V(xa, yw0, z), c01 = V(xb, yw1, z + winPitch), c11 = V(xb, yw1, z);
 			const pts = s < 0 ? [c10, c00, c11, c01] : [c00, c10, c01, c11];
-			root.add(patchFrame(pts[0], pts[1], pts[2], pts[3], [winPath(0.25, 0.22, 0.75, 0.8, 0.22, 0.24)], 0.13, wallMat, 14));
+			root.add(patchFrame(pts[0], pts[1], pts[2], pts[3], [winPath(0.29, 0.26, 0.71, 0.78, 0.2, 0.21)], 0.13, liner, 14));
 			// window shade, mostly raised
 			const sh = add(root, new THREE.PlaneGeometry(winPitch * 0.48, 0.08), shade, (xa + xb) / 2 - s * 0.015, yw1 - 0.13, z + winPitch / 2, 0, s * -Math.PI / 2 + (s < 0 ? Math.PI : 0), 0);
 			void sh;
@@ -957,7 +995,7 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 	const fabric = imat(airbus ? 0x24486b : 0x2b3350, 0.95), frame = imat(0x55595e, 0.4, 0.6), cover = imat(0xf3f1ea, 0.9);
 	const plastic = imat(0x8c9096, 0.6);
 	const r = rnd(7);
-	const shirts = [0x2b4c7e, 0x7a2b2b, 0xe8e6e0, 0x3e5c3a, 0x111215, 0xb38b4a, 0x6a4a7a, 0xd4d0c6, 0x274a4a];
+	const shirts = [0x2b4c7e, 0x7a2b2b, 0xc9c6bf, 0x3e5c3a, 0x111215, 0xb38b4a, 0x6a4a7a, 0xd4d0c6, 0x274a4a];
 	const skins = [0xf1c8a6, 0xd9a888, 0xa86f4c, 0x6b4430, 0xe7b995];
 	const hairs = [0x1a1410, 0x3a2a1e, 0x6b4a2a, 0xb9a27a, 0x9c9c9c, 0x2a1c14];
 	const seatXs = [-1.32, -0.86, -0.4, 0.4, 0.86, 1.32];
