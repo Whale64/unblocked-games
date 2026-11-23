@@ -1007,10 +1007,12 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 		for (const [k, sx] of seatXs.entries()) {
 			const st = seat(fabric, frame, { w: 0.44, arms: k === 0 || k === 3 ? false : true });
 			st.position.set(sx, floorY + 0.46, z);
-			add(st.userData.back, rbox(0.3, 0.16, 0.012, 0.006), cover, 0, 0.27, -0.072);
-			// seat-back: tray table and IFE screen frame
-			add(st.userData.back, rbox(0.34, 0.24, 0.012, 0.01), plastic, 0, -0.08, -0.07);
-			add(st.userData.back, rbox(0.2, 0.13, 0.012, 0.006), imat(0x101113, 0.4), 0, 0.12, -0.072);
+			st.scale.set(1, 0.88, 1);
+			// the side facing the passenger behind: headrest cover, IFE screen, tray table, seat pocket
+			add(st.userData.back, rbox(0.3, 0.16, 0.012, 0.006), cover, 0, 0.27, 0.072);
+			add(st.userData.back, rbox(0.2, 0.13, 0.012, 0.006), imat(0x101113, 0.4), 0, 0.12, 0.072);
+			add(st.userData.back, rbox(0.34, 0.22, 0.014, 0.01), plastic, 0, -0.1, 0.072);
+			add(st.userData.back, rbox(0.32, 0.12, 0.02, 0.01), imat(0x1a1c22, 0.9), 0, -0.3, 0.075);
 			root.add(st);
 			if (row === -1 && k === 0) ife = st.userData.back;
 			const isMe = row === 0 && k === 0;
@@ -1025,7 +1027,7 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 	}
 	let instruments = null;
 	if (withAvionics && ife) {
-		instruments = createAvionics(cfg, [{ type: 'nd', res: [512, 512], hz: 4, mounts: [{ parent: ife, x: 0, y: 0.12, z: -0.079, w: 0.185, h: 0.118, ry: Math.PI }] }]);
+		instruments = createAvionics(cfg, [{ type: 'nd', res: [512, 512], hz: 4, mounts: [{ parent: ife, x: 0, y: 0.12, z: 0.0795, w: 0.185, h: 0.118 }] }]);
 	}
 	finishInterior(root);
 	const eye = [seatXs[0] + 0.12, floorY + 1.15, seatZ + 0.2];
