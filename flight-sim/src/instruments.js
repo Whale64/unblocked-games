@@ -386,3 +386,222 @@ export function createInstruments(cfg, panel, panelW, panelH, depth) {
 		},
 	};
 }
+
+// ------------------------------------------------------------------ autopilot control panel (A320 FCU / 737 MCP)
+function seg(g, s, x, y, size, col = '#ff9d2e', align = 'center') {
+	g.font = `700 ${size}px ${FONT}`; g.textAlign = align; g.textBaseline = 'middle';
+	g.fillStyle = 'rgba(255,157,46,0.08)'; g.fillText(s.replace(/[0-9]/g, '8'), x, y);
+	g.fillStyle = col; g.fillText(s, x, y);
+}
+function drawFCU(d, t, x) {
+	const { g, w: W, h: H } = d;
+	const ap = x.ap || {};
+	const airbus = !!x.cfg.fbw;
+	g.fillStyle = airbus ? '#56616b' : '#5d6267'; g.fillRect(0, 0, W, H);
+	g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(0, H - 4, W, 4);
+	const win = (cx, w, label, value, lit) => {
+		txt(g, label, cx, H * 0.14, 15, '#e9edf0', 'center', '700');
+		g.fillStyle = '#060707'; g.fillRect(cx - w / 2, H * 0.24, w, H * 0.32);
+		seg(g, value, cx, H * 0.41, 34, lit === false ? '#5b3a17' : '#ff9d2e');
+		// knob below the window
+		const kr = H * 0.15;
+		const gr = g.createRadialGradient(cx - kr * 0.3, H * 0.76 - kr * 0.3, 2, cx, H * 0.76, kr);
+		gr.addColorStop(0, '#5a5f66'); gr.addColorStop(1, '#16181b');
+		g.fillStyle = gr; g.beginPath(); g.arc(cx, H * 0.76, kr, 0, 7); g.fill();
+		g.strokeStyle = '#0a0b0c'; g.lineWidth = 2; g.stroke();
+	};
+	const btn = (cx, cy, label, on, w = 70) => {
+		g.fillStyle = '#2b3036'; g.fillRect(cx - w / 2, cy - 18, w, 36);
+		g.strokeStyle = '#15181b'; g.lineWidth = 2; g.strokeRect(cx - w / 2, cy - 18, w, 36);
+		txt(g, label, cx, cy + 5, 13, '#e9edf0', 'center', '700');
+		g.fillStyle = on ? '#3dff6e' : '#1d2a20'; g.fillRect(cx - w * 0.3, cy - 13, w * 0.6, 5);
+	};
+	const spd = String(Math.round(ap.spdTarget || t.ias)).padStart(3, '0');
+	const hdg = ap.locCap ? '---' : String(Math.round(ap.hdgTarget ?? t.heading) % 360).padStart(3, '0');
+	const alt = String(Math.round(ap.altTarget ?? Math.round(t.alt / 100) * 100)).padStart(5, '0');
+	const vsOn = ap.engaged && ap.vert === 'V/S';
+	const vs = vsOn ? ((ap.altTarget * 0.3048 > (x.pos ? x.pos.y : 0) ? '+' : '-') + String(ap.vsSel).padStart(4, '0')) : '-----';
+	if (airbus) {
+		win(W * 0.1, 120, 'SPD', ap.athr ? spd : '---', true);
+		btn(W * 0.21, H * 0.76, 'LOC', ap.appArmed && !ap.gsCap || ap.locCap);
+		win(W * 0.32, 120, 'HDG', hdg);
+		btn(W * 0.44, H * 0.45, 'AP1', ap.engaged); btn(W * 0.53, H * 0.45, 'AP2', false);
+		btn(W * 0.485, H * 0.78, 'A/THR', ap.athr, 80);
+		win(W * 0.66, 150, 'ALT', alt);
+		btn(W * 0.66 + 105, H * 0.76, 'EXPED', false, 74);
+		win(W * 0.88, 150, 'V/S', vs, vsOn);
+		btn(W * 0.88 - 115, H * 0.78, 'APPR', ap.appArmed || ap.gsCap, 70);
+	} else {
+		btn(W * 0.05, H * 0.45, 'A/T ARM', ap.athr, 78);
+		win(W * 0.16, 110, 'IAS/MACH', ap.athr ? spd : '   ', ap.athr);
+		btn(W * 0.27, H * 0.3, 'SPEED', ap.athr && !ap.rollout, 70); btn(W * 0.27, H * 0.7, 'LVL CHG', false, 70);
+		win(W * 0.38, 110, 'HEADING', hdg);
+		btn(W * 0.48, H * 0.3, 'HDG SEL', ap.engaged && !ap.locCap, 70); btn(W * 0.48, H * 0.7, 'APP', ap.appArmed || ap.gsCap, 70);
+		win(W * 0.6, 140, 'ALTITUDE', alt);
+		btn(W * 0.705, H * 0.3, 'ALT HLD', ap.engaged && ap.vert === 'ALT', 70); btn(W * 0.705, H * 0.7, 'V/S', vsOn, 70);
+		win(W * 0.82, 130, 'VERT SPEED', vs, vsOn);
+		btn(W * 0.94, H * 0.3, 'CMD A', ap.engaged, 70); btn(W * 0.94, H * 0.7, 'CMD B', false, 70);
+	}
+}
+
+// ------------------------------------------------------------------ lower ECAM / EICAS: wheel & gear page
+function drawSD(d, t, x) {
+	const { g, w: W, h: H } = d;
+	g.fillStyle = '#04060a'; g.fillRect(0, 0, W, H);
+	txt(g, x.cfg.fbw ? 'WHEEL' : 'GEAR / BRAKES', W * 0.5, 26, 22, WHT, 'center', '700');
+	g.strokeStyle = WHT; g.lineWidth = 1.5; g.beginPath(); g.moveTo(W * 0.38, 40); g.lineTo(W * 0.62, 40); g.stroke();
+	// spoilers
+	for (let i = 0; i < 5; i++) for (const s of [-1, 1]) {
+		const px = W * 0.5 + s * (40 + i * 26), py = 74;
+		g.strokeStyle = t.airbrake > 0.05 ? GRN : '#2a6b3a'; g.lineWidth = 3;
+		g.beginPath(); g.moveTo(px - 9, py + 6); g.lineTo(px + 9, py + 6); g.stroke();
+		if (t.airbrake > 0.05) { g.beginPath(); g.moveTo(px, py + 4); g.lineTo(px, py - 14); g.moveTo(px - 6, py - 8); g.lineTo(px, py - 14); g.lineTo(px + 6, py - 8); g.stroke(); }
+	}
+	// gear triangles
+	const gearCol = t.gearPos > 0.99 ? GRN : t.gearPos < 0.01 ? null : '#ff3b30';
+	const tri = (cx, cy, lab) => {
+		g.strokeStyle = gearCol || '#3a3f45'; g.fillStyle = gearCol || 'transparent'; g.lineWidth = 2;
+		for (const o of [-14, 14]) { g.beginPath(); g.moveTo(cx + o - 11, cy - 9); g.lineTo(cx + o + 11, cy - 9); g.lineTo(cx + o, cy + 10); g.closePath(); if (gearCol) g.fill(); else g.stroke(); }
+		txt(g, lab, cx, cy + 28, 14, CYAN);
+	};
+	tri(W * 0.5, H * 0.32, 'NOSE'); tri(W * 0.22, H * 0.5, 'L MAIN'); tri(W * 0.78, H * 0.5, 'R MAIN');
+	txt(g, t.gearPos > 0.99 ? 'LDG GEAR DN' : t.gearPos < 0.01 ? 'LDG GEAR UP' : 'GEAR TRANSIT', W * 0.5, H * 0.5, 16, gearCol || WHT);
+	// brake temperatures warm with braking
+	d.bt = (d.bt ?? 60) + ((t.brake > 0.05 && t.gs > 5 ? 700 : 60) - (d.bt ?? 60)) * 0.004;
+	const bt = Math.round(d.bt / 5) * 5;
+	txt(g, 'BRAKES  °C', W * 0.5, H * 0.66, 15, WHT);
+	[[0.12, 'REL'], [0.3, ''], [0.7, ''], [0.88, 'REL']].forEach(([fx], i) => {
+		g.strokeStyle = '#555c66'; g.lineWidth = 1.5; g.strokeRect(W * fx - 34, H * 0.7, 68, 34);
+		txt(g, String(bt + (i % 2) * 5), W * fx, H * 0.7 + 18, 20, bt > 300 ? AMB : GRN, 'center', '700');
+	});
+	if (t.parkBrake) txt(g, 'PARK BRK', W * 0.5, H * 0.79, 17, AMB, 'center', '700');
+	// status strip
+	g.strokeStyle = '#2b3036'; g.beginPath(); g.moveTo(0, H * 0.86); g.lineTo(W, H * 0.86); g.stroke();
+	const sat = Math.round(15 - (x.pos ? x.pos.y : 0) * 0.0065);
+	txt(g, `TAT ${sat + 2 >= 0 ? '+' : ''}${sat + 2} °C`, W * 0.16, H * 0.9, 14, WHT, 'center', '500');
+	txt(g, `SAT ${sat >= 0 ? '+' : ''}${sat} °C`, W * 0.16, H * 0.96, 14, WHT, 'center', '500');
+	const now = new Date();
+	txt(g, `${String(now.getUTCHours()).padStart(2, '0')} H ${String(now.getUTCMinutes()).padStart(2, '0')}`, W * 0.5, H * 0.93, 17, GRN, 'center', '700');
+	txt(g, `GW ${Math.round((x.cfg.mass || 60000) / 100) * 100} KG`, W * 0.84, H * 0.93, 14, GRN, 'center', '600');
+}
+
+// ------------------------------------------------------------------ MCDU / FMS CDU flight plan page
+function drawMCDU(d, t, x) {
+	const { g, w: W, h: H } = d;
+	g.fillStyle = '#020403'; g.fillRect(0, 0, W, H);
+	const lh = H / 14, cw = W / 24;
+	const line = (r, s, col = WHT, align = 'left', size = lh * 0.78) => txt(g, s, align === 'left' ? cw * 0.5 : align === 'right' ? W - cw * 0.5 : W / 2, lh * (r + 0.6), size, col, align, '600');
+	const ap = (x.navText || 'SKW 0.0NM').split(' ')[0];
+	const nm = parseFloat((x.navText || '').split(' ')[1]) || 0;
+	line(0, ' F-PLN', WHT, 'center');
+	line(1, ` FROM`, WHT); line(1, `${ap}D`, WHT, 'right');
+	line(2, ` ${ap}`, GRN); line(2, `${String(Math.round(t.ias)).padStart(3, ' ')}/ ${Math.round(t.alt / 100) * 100}`, GRN, 'right');
+	const legs = [['CF10', 12], ['FF10', 8], [`RW10`, 0]];
+	legs.forEach(([wp, off], i) => {
+		const dist = Math.max(0, nm - off * 0.0).toFixed(0);
+		line(3 + i * 2, `  C100°   ${i ? '' : dist + 'NM'}`, WHT, 'left', lh * 0.6);
+		line(4 + i * 2, ` ${wp}`, i === 0 ? GRN : WHT);
+		line(4 + i * 2, `${i === 2 ? '138' : '160'}/  ${i === 2 ? ' 100' : (2000 - i * 700)}`, CYAN, 'right');
+	});
+	line(10, ' ------END OF F-PLN------', WHT, 'left', lh * 0.62);
+	line(11, ' DEST   TIME  DIST  EFOB', WHT, 'left', lh * 0.62);
+	line(12, ` ${ap}10  ${String(Math.round(nm / Math.max(t.gs, 60) * 60)).padStart(4, '0')}  ${String(Math.round(nm)).padStart(4, ' ')}   4.8`, WHT, 'left', lh * 0.7);
+	g.fillStyle = 'rgba(80,120,90,0.12)'; g.fillRect(0, lh * 13, W, lh);
+}
+
+// ------------------------------------------------------------------ general-aviation radio stack
+function drawRadio(d, t, x) {
+	const { g, w: W, h: H } = d;
+	g.fillStyle = '#16181b'; g.fillRect(0, 0, W, H);
+	const unit = (y, h) => { const gr = g.createLinearGradient(0, y, 0, y + h); gr.addColorStop(0, '#2c3035'); gr.addColorStop(1, '#1d2024'); g.fillStyle = gr; g.fillRect(8, y + 4, W - 16, h - 8); g.strokeStyle = '#0c0d0f'; g.lineWidth = 3; g.strokeRect(8, y + 4, W - 16, h - 8); };
+	const knob = (cx, cy, r) => { const gr = g.createRadialGradient(cx - r * 0.3, cy - r * 0.3, 1, cx, cy, r); gr.addColorStop(0, '#666b72'); gr.addColorStop(1, '#141518'); g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, r, 0, 7); g.fill(); };
+	const lcd = (cx, cy, s, size = 34, col = '#7dff8e') => { g.fillStyle = '#071008'; g.fillRect(cx - size * 2.1, cy - size * 0.62, size * 4.2, size * 1.24); txt(g, s, cx, cy, size, col, 'center', '700'); };
+	// audio panel
+	unit(0, H * 0.16);
+	['COM1', 'COM2', 'NAV1', 'NAV2', 'MKR', 'SPKR'].forEach((s, i) => {
+		const cx = 52 + i * 78;
+		g.fillStyle = '#0f1113'; g.fillRect(cx - 30, H * 0.05, 60, H * 0.07);
+		txt(g, s, cx, H * 0.085, 13, '#dfe3e7', 'center', '700');
+		g.fillStyle = i === 0 || i === 2 || i === 5 ? '#55ff6a' : '#1d3320'; g.fillRect(cx - 12, H * 0.042, 24, 4);
+	});
+	// COM / NAV
+	unit(H * 0.16, H * 0.3);
+	txt(g, 'COM', 36, H * 0.24, 13, '#cfd5da', 'left', '700');
+	lcd(W * 0.3, H * 0.25, '118.300', 30); lcd(W * 0.7, H * 0.25, '121.500', 30, '#5fcf70');
+	txt(g, 'NAV', 36, H * 0.38, 13, '#cfd5da', 'left', '700');
+	lcd(W * 0.3, H * 0.385, '110.30', 30); lcd(W * 0.7, H * 0.385, '113.90', 30, '#5fcf70');
+	knob(W - 40, H * 0.31, 22);
+	// GPS mini-map strip
+	unit(H * 0.46, H * 0.32);
+	g.fillStyle = '#0a1a12'; g.fillRect(30, H * 0.49, W - 120, H * 0.26);
+	txt(g, (x.navText || ''), 40, H * 0.52, 16, MAG, 'left', '700');
+	txt(g, `GS ${Math.round(t.gs)}KT   TRK ${String(Math.round(t.track ?? t.heading)).padStart(3, '0')}°`, 40, H * 0.58, 15, WHT, 'left', '600');
+	g.strokeStyle = MAG; g.lineWidth = 3; g.beginPath(); g.moveTo(W * 0.42, H * 0.73); g.lineTo(W * 0.6, H * 0.63); g.stroke();
+	g.fillStyle = WHT; g.beginPath(); g.moveTo(W * 0.42, H * 0.7); g.lineTo(W * 0.4, H * 0.74); g.lineTo(W * 0.44, H * 0.74); g.fill();
+	knob(W - 52, H * 0.6, 26);
+	// transponder
+	unit(H * 0.78, H * 0.22);
+	txt(g, 'XPDR', 36, H * 0.86, 13, '#cfd5da', 'left', '700');
+	lcd(W * 0.4, H * 0.88, '7000', 30);
+	txt(g, 'ALT', W * 0.62, H * 0.86, 15, '#7dff8e', 'left', '700');
+	txt(g, `FL${String(Math.max(0, Math.round(t.alt / 100))).padStart(3, '0')}`, W * 0.62, H * 0.92, 15, '#7dff8e', 'left', '700');
+	knob(W - 40, H * 0.89, 18);
+}
+
+// ------------------------------------------------------------------ fighter up-front controller scratchpad
+function drawUFC(d, t, x) {
+	const { g, w: W, h: H } = d;
+	g.fillStyle = '#081208'; g.fillRect(0, 0, W, H);
+	const ap = x.ap || {};
+	const L = [
+		`UHF 251.00   TCN 077X`,
+		`STPT ${(x.navText || '').split(' ')[0] || 'SKW'}  ${(x.navText || '').split(' ')[1] || ''}`,
+		`ALT ${String(Math.round(t.alt)).padStart(5, ' ')}  M${t.mach.toFixed(2)}`,
+		`${ap.engaged ? 'A/P ' + (ap.vert || '') + ' ' + (ap.lat || '') : 'A/P OFF'}`,
+	];
+	L.forEach((s, i) => txt(g, s, 14, H * (0.15 + i * 0.23), H * 0.17, '#7dff6a', 'left', '700'));
+}
+
+// ------------------------------------------------------------------ flexible avionics layout
+const DRAW = { pfd: drawPFD, nd: drawND, eng: drawEng, six: drawSixPack, fcu: drawFCU, sd: drawSD, mcdu: drawMCDU, radio: drawRadio, ufc: drawUFC };
+
+// slots: [{ type, res: [W, H], hz, mounts: [{ parent, x, y, z, w, h, rx, ry, uv: [u0, v0, u1, v1], circle }] }]
+// Every mount of a slot shows the same canvas (captain and first officer share one texture).
+export function createAvionics(cfg, slots) {
+	const displays = [];
+	for (const s of slots) {
+		const [W, H] = s.res || [512, 512];
+		const c = document.createElement('canvas');
+		c.width = W; c.height = H;
+		const tex = new THREE.CanvasTexture(c);
+		tex.colorSpace = THREE.SRGBColorSpace;
+		tex.anisotropy = 8;
+		const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
+		for (const m of s.mounts) {
+			const geo = m.circle ? new THREE.CircleGeometry(m.circle, 48) : new THREE.PlaneGeometry(m.w, m.h);
+			if (m.uv) {
+				const uv = geo.attributes.uv;
+				for (let i = 0; i < uv.count; i++) uv.setXY(i, m.uv[0] + uv.getX(i) * (m.uv[2] - m.uv[0]), m.uv[1] + uv.getY(i) * (m.uv[3] - m.uv[1]));
+			}
+			const mesh = new THREE.Mesh(geo, mat);
+			mesh.position.set(m.x || 0, m.y || 0, m.z || 0);
+			mesh.rotation.set(m.rx || 0, m.ry || 0, 0);
+			m.parent.add(mesh);
+		}
+		displays.push({ d: { c, g: c.getContext('2d'), tex, mat, w: W, h: H, t: Math.random() }, draw: DRAW[s.type], hz: s.hz || 10 });
+	}
+	return {
+		displays,
+		setGain(gain) { for (const x of displays) x.d.mat.color.setScalar(gain); },
+		update(dt, t, extra, active) {
+			for (const x of displays) {
+				x.d.t += dt;
+				const hz = active ? x.hz : Math.min(x.hz, 2);
+				if (x.d.t < 1 / hz) continue;
+				x.d.t = 0;
+				x.draw(x.d, t, extra);
+				x.d.tex.needsUpdate = true;
+			}
+		},
+	};
+}

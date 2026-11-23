@@ -185,7 +185,7 @@ export class Audio {
 		const ctx = this.ctx, N = this.nodes, now = ctx.currentTime;
 		const sm = (param, v, tc = 0.08) => param.setTargetAtTime(v, now, tc);
 		const on = this.enabled && !paused && !t.crashed ? 1 : 0;
-		const inside = view === 'cockpit';
+		const inside = view === 'cockpit' || view === 'cabin';
 		sm(this.interior.frequency, inside ? 1800 : 16000, 0.2);
 		const extGain = inside ? 1 : 0.75;
 		const V = t.tas / 1.94384;

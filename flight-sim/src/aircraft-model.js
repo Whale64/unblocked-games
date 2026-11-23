@@ -1,7 +1,7 @@
 // Procedural aircraft geometry: lofted superellipse fuselages, NACA 4-digit airfoil wings with
 // hinged control surfaces, canopies, landing gear, propeller / jet nozzle with afterburner.
 import * as THREE from 'three';
-import { createInstruments } from './instruments.js';
+import { buildAirlinerDeck, buildJetCockpit, buildTrainerCockpit, buildCabin } from './cockpit.js';
 
 // ---------------------------------------------------------------- helpers
 const sgnPow = (x, e) => Math.sign(x) * Math.pow(Math.abs(x), e);
@@ -402,54 +402,7 @@ function common() {
 }
 
 function finalize(root) {
-	root.traverse((o) => { if (o.isMesh && !o.material.transparent) { o.castShadow = true; o.receiveShadow = true; } });
-}
-
-function buildCockpit(eye, width, panelColor, cfg) {
-	const grp = new THREE.Group();
-	const panelMat = new THREE.MeshStandardMaterial({ color: panelColor, roughness: 0.75 });
-	const big = cfg && cfg.category === 'airliner';
-	const ph = big ? 0.3 : 0.32, depth = 0.06;
-	const panel = new THREE.Mesh(new THREE.BoxGeometry(width, ph, depth), panelMat);
-	panel.position.set(0, eye[1] - (big ? 0.33 : 0.36), eye[2] - (big ? 0.72 : 0.72));
-	panel.rotation.x = -0.25;
-	const glare = new THREE.Mesh(new THREE.BoxGeometry(width * 1.02, 0.05, 0.25), panelMat);
-	glare.position.set(0, panel.position.y + ph / 2 + 0.02, panel.position.z - 0.06);
-	grp.add(panel, glare);
-	// live avionics on the panel face
-	if (cfg && !NO_AVIONICS) grp.userData.instruments = createInstruments(cfg, panel, width, ph, depth);
-	// throttle levers on the pedestal / side console
-	const levers = [];
-	const nLev = cfg && cfg.engines ? cfg.engines.length : 1;
-	for (let i = 0; i < nLev; i++) {
-		const lv = new THREE.Group();
-		const arm = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.16, 0.02), new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.8, roughness: 0.3 }));
-		arm.position.y = 0.08;
-		const knob = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.03), new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.6 }));
-		knob.position.y = 0.17;
-		lv.add(arm, knob);
-		lv.position.set(big ? 0.42 + i * 0.07 : -0.28, eye[1] - 0.62, eye[2] - (big ? 0.38 : 0.3));
-		grp.add(lv);
-		levers.push(lv);
-	}
-	if (big) {
-		const ped = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.6), panelMat);
-		ped.position.set(0.455, eye[1] - 0.68, eye[2] - 0.33);
-		grp.add(ped);
-	}
-	grp.userData.levers = levers;
-	// control stick
-	const stick = new THREE.Group();
-	const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.42, 8), panelMat);
-	shaft.position.y = 0.21;
-	const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.02, 0.1, 8), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 }));
-	grip.position.y = 0.45;
-	stick.add(shaft, grip);
-	stick.position.set(0, eye[1] - 0.9, eye[2] - 0.38);
-	grp.add(stick);
-	grp.userData.stick = stick;
-	grp.userData.glow = [];
-	return grp;
+	root.traverse((o) => { if (o.isMesh && !o.material.transparent && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; } });
 }
 
 function buildPilot(eye, suitColor) {
@@ -553,9 +506,7 @@ function buildTrainer(cfg) {
 	canopy.position.set(0, 0.42, -0.65);
 	canopy.renderOrder = 2;
 	root.add(canopy);
-	const frame = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.025, 6, 24, Math.PI), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 }));
-	frame.position.set(0, 0.42, -1.25); frame.scale.set(1, 0.98, 1);
-	root.add(frame);
+
 
 	// spinner + propeller
 	const spinner = new THREE.Mesh(new THREE.LatheGeometry(
@@ -611,7 +562,7 @@ function buildTrainer(cfg) {
 		gear.push({ grp, wheel: wh, base: wpos.clone(), strut });
 	});
 
-	const cockpit = buildCockpit(cfg.eye, 0.8, 0x2a2c30, cfg);
+	const cockpit = NO_AVIONICS ? new THREE.Group() : buildTrainerCockpit(cfg, true);
 	const pilot = buildPilot(cfg.eye, 0x3b4a2a);
 	root.add(cockpit, pilot);
 	finalize(root);
@@ -757,9 +708,6 @@ function buildJet(cfg) {
 	canopy.position.set(0, 0.5, -4.25);
 	canopy.renderOrder = 2;
 	root.add(canopy);
-	const hudGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.14), new THREE.MeshBasicMaterial({ color: 0x88ffaa, transparent: true, opacity: 0.08, depthWrite: false }));
-	hudGlass.position.set(0, cfg.eye[1] - 0.06, cfg.eye[2] - 0.62); hudGlass.rotation.x = -0.35;
-	root.add(hudGlass);
 
 	// nozzle + flame
 	const noz = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.56, 1.0, 24, 1, true), new THREE.MeshStandardMaterial({ color: 0x4a4440, roughness: 0.45, metalness: 0.9, side: THREE.DoubleSide }));
@@ -800,8 +748,7 @@ function buildJet(cfg) {
 		root.add(pivot);
 		gear.push({ grp: pivot, wheel: wh, base: wh.position.clone(), strut, retractAxis: i === 0 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, gd.p[0] > 0 ? 1 : -1), retractAngle: i === 0 ? -1.75 : 1.6 });
 	});
-	const cockpit = buildCockpit(cfg.eye, 0.75, 0x2d3034, cfg);
-	cockpit.position.set(0, -0.08, -0.1);
+	const cockpit = NO_AVIONICS ? new THREE.Group() : buildJetCockpit(cfg, true);
 	const pilot = buildPilot(cfg.eye, 0x4a5240);
 	root.add(cockpit, pilot);
 	finalize(root);
@@ -914,31 +861,6 @@ function fanTexture() {
 	}
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
 	return t;
-}
-
-// Inside-the-cockpit shell with window cut-outs (seen only from the pilot's seat).
-function cockpitShell(eye) {
-	const W = 1024, H = 512;
-	const c = makeCanvas(W, H), g = c.getContext('2d');
-	g.fillStyle = '#2b2f34'; g.fillRect(0, 0, W, H);
-	const P = (yawDeg, elDeg) => [(0.75 - yawDeg / 360) * W, (0.5 - elDeg / 180) * H];
-	const hole = (pts) => { g.beginPath(); pts.forEach((p, i) => { const q = P(p[0], p[1]); if (i) g.lineTo(q[0], q[1]); else g.moveTo(q[0], q[1]); }); g.closePath(); g.fill(); };
-	g.globalCompositeOperation = 'destination-out';
-	g.fillStyle = '#000';
-	// captain seat: centre post slightly right of the eye
-	hole([[-36, -9], [4, -9], [5, 17], [-30, 15]]);
-	hole([[9, -9], [44, -8], [38, 14], [10, 17]]);
-	hole([[-74, -6], [-41, -8], [-36, 13], [-70, 11]]);
-	hole([[48, -7], [78, -5], [74, 11], [44, 13]]);
-	hole([[-112, -3], [-80, -5], [-77, 9], [-108, 8]]);
-	hole([[84, -4], [110, -2], [107, 8], [81, 9]]);
-	g.globalCompositeOperation = 'source-over';
-	const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-	const mat = new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, side: THREE.BackSide, roughness: 0.85 });
-	const m = new THREE.Mesh(new THREE.SphereGeometry(1.1, 48, 24), mat);
-	m.position.set(eye[0], eye[1], eye[2]);
-	m.renderOrder = 1;
-	return m;
 }
 
 function buildAirliner(cfg) {
@@ -1086,13 +1008,12 @@ function buildAirliner(cfg) {
 		gear.push({ grp: pivot, wheel: wheels, base: wheels.position.clone(), strut, retractAxis: isNose ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, gd.p[0] > 0 ? 1 : -1), retractAngle: isNose ? -1.6 : 1.55 });
 	});
 
-	const cockpit = buildCockpit(cfg.eye, 1.4, 0x2d3034, cfg);
-	cockpit.position.x = cfg.eye[0];
-	const shell = cockpitShell(cfg.eye);
-	cockpit.add(shell);
-	shell.position.x -= cfg.eye[0];
+	const cockpit = NO_AVIONICS ? new THREE.Group() : buildAirlinerDeck(cfg, true);
+	cockpit.visible = false;
+	const cabin = NO_AVIONICS ? null : buildCabin(cfg, spec.fus[5][1], true);
+	if (cabin) { cabin.visible = false; root.add(cabin); }
 	const pilot = buildPilot(cfg.eye, 0x222a3a);
 	root.add(cockpit, pilot);
 	finalize(root);
-	return { root, surfaces, gear, canopy: null, cockpit, pilot, type: 'airliner', shell };
+	return { root, surfaces, gear, canopy: null, cockpit, cabin, pilot, type: 'airliner' };
 }

@@ -19,6 +19,7 @@ import { DevicesUI } from './devices-ui.js';
 import { initSettlements, towns, roads } from './settlements.js';
 import { CityLife } from './citylife.js';
 import { Grass } from './grass.js';
+import { interiorLight, animateCockpit } from './cockpit.js';
 import { Autopilot } from './autopilot.js';
 import { LandingChallenge, RingCourse, LANDING_LEVELS, loadBests, fmtTime } from './challenges.js';
 
@@ -144,7 +145,7 @@ class Game {
 		}, (i) => {
 			const cfgA = i % 2 ? AIRCRAFT.a320 : AIRCRAFT.b737;
 			const m = buildAircraft(cfgA, { parked: true });
-			m.pilot.visible = false; m.shell.visible = false; m.cockpit.visible = false;
+			m.pilot.visible = false; m.cockpit.visible = false;
 			return { root: m.root, gearY: -cfgA.gear[1].p[1] - 0.15 };
 		});
 		this.patchLighting(this.airports.group);
@@ -457,9 +458,13 @@ class Game {
 		if (c.hit('KeyH')) $('help').classList.toggle('hidden');
 		if (this.paused) return;
 		if (c.hit('Backspace')) { this.startFlight(); return; }
-		if (c.hit('KeyC')) { this.view = VIEWS[(VIEWS.indexOf(this.view) + 1) % VIEWS.length]; this.hud.toast(`View: ${this.view}`, '#ddd', 1.2); this.cam.flyby = null; }
+		if (c.hit('KeyC')) { const vs = this.model && this.model.cabin ? [...VIEWS.slice(0, 2), 'cabin', ...VIEWS.slice(2)] : VIEWS; this.view = vs[(vs.indexOf(this.view) + 1) % vs.length]; this.hud.toast(`View: ${this.view}`, '#ddd', 1.2); this.cam.flyby = null; }
 		if (c.hit('KeyV')) { this.view = this.view === 'cockpit' ? 'chase' : 'cockpit'; }
-		for (const [k, v] of [['F1', 'cockpit'], ['F2', 'chase'], ['F3', 'orbit'], ['F4', 'flyby'], ['F5', 'tower']]) if (c.hit(k)) { this.view = v; this.cam.flyby = null; }
+		for (const [k, v] of [['F1', 'cockpit'], ['F2', 'chase'], ['F3', 'orbit'], ['F4', 'flyby'], ['F5', 'tower'], ['F6', 'cabin']]) if (c.hit(k)) {
+			if (v === 'cabin' && !(this.model && this.model.cabin)) { this.hud.toast('Passenger view is available in the airliners', '#ffc048', 2); continue; }
+			this.view = v; this.cam.flyby = null;
+			if (v === 'cabin') { this.cam.headYaw = 0.95; this.cam.headPitch = -0.12; }
+		}
 		if (c.hit('KeyI')) this.hud.visible = !this.hud.visible;
 		if (c.hit('KeyG') && cfg.retractable) {
 			if (fm.onGround && fm.gearDown) this.hud.toast('Gear handle locked on the ground', '#ffc048');
@@ -736,10 +741,14 @@ class Game {
 			g.wheel.rotation.x = -st.wheelRot;
 			if (i === 0) g.wheel.rotation.y = this.ctl ? this.ctl.yaw * 0.5 * Math.max(0.15, 1 - fm.tel.gs / 90) : 0;
 		});
-		// cockpit stick
-		if (m.cockpit.userData.stick) m.cockpit.userData.stick.rotation.set(fm.de * 0.3, 0, -fm.da * 0.3);
+		// cockpit controls follow the flight controls
 		const inside = this.view === 'cockpit';
-		m.pilot.visible = !inside;
+		const cabinView = this.view === 'cabin' && !!m.cabin;
+		if (inside || m.type !== 'airliner') animateCockpit(m.cockpit, fm, this.ctl, this.controls.throttle, dt);
+		// the airliner flight deck / cabin only exist from the inside
+		if (m.type === 'airliner') m.cockpit.visible = inside;
+		if (m.cabin) m.cabin.visible = cabinView;
+		m.pilot.visible = !inside && !cabinView;
 		if (m.canopy) m.canopy.visible = !inside;
 		// open up the cockpit: clip a box out of the fuselage around the seat so the panel is visible
 		if (m.cockpitCut && m.fuselageMat) {
@@ -757,7 +766,6 @@ class Game {
 				fmat.clippingPlanes = []; fmat.side = THREE.FrontSide; fmat.needsUpdate = true;
 			}
 		}
-		if (m.shell) m.shell.visible = inside;
 	}
 
 	updateEffects(dt, tel) {
@@ -809,20 +817,22 @@ class Game {
 		const sx = (Math.random() - 0.5) * shake * 0.04, sy = (Math.random() - 0.5) * shake * 0.04;
 		let fov = 60;
 		const pos = fm.pos;
-		if (this.view === 'cockpit') {
+		const cabinView = this.view === 'cabin' && this.model && this.model.cabin;
+		if (this.view === 'cockpit' || cabinView) {
 			const lk = this.controls.look;
+			const rest = cabinView ? [0.95, -0.12] : [0, 0];
 			if (lk.x || lk.y) { c.headYaw -= lk.x * dt * 1.9; c.headPitch += lk.y * dt * 1.3; c.idle = 0; }
 			else if (md.dx || md.dy) { c.headYaw -= md.dx * 0.004; c.headPitch -= md.dy * 0.004; c.idle = 0; } else c.idle += dt;
 			c.headYaw = THREE.MathUtils.clamp(c.headYaw, -2.6, 2.6);
 			c.headPitch = THREE.MathUtils.clamp(c.headPitch, -1.2, 1.3);
-			if (c.idle > 1.5 && !this.controls.mouse.dragging) { c.headYaw *= Math.exp(-dt * 2); c.headPitch *= Math.exp(-dt * 2); }
+			if (c.idle > 1.5 && !this.controls.mouse.dragging) { const k = Math.exp(-dt * 2); c.headYaw = rest[0] + (c.headYaw - rest[0]) * k; c.headPitch = rest[1] + (c.headPitch - rest[1]) * k; }
 			// G-induced head movement
 			const accB = this.fm.accel.clone().applyQuaternion(fm.quat.clone().invert());
-			const eye = new THREE.Vector3(...cfg.eye).add(new THREE.Vector3(-accB.x * 0.002, -THREE.MathUtils.clamp((fm.nz - 1) * 0.012, -0.05, 0.08), 0));
+			const eye = new THREE.Vector3(...(cabinView ? this.model.cabin.userData.eye : cfg.eye)).add(new THREE.Vector3(-accB.x * 0.002, -THREE.MathUtils.clamp((fm.nz - 1) * 0.012, -0.05, 0.08), 0));
 			cam.position.copy(eye.applyQuaternion(fm.quat).add(pos));
 			cam.quaternion.copy(fm.quat).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(c.headPitch + sy, c.headYaw + sx, 0, 'YXZ')));
 			fov = 72 - Math.min(10, md.wheel);
-			cam.near = 0.08;
+			cam.near = cabinView ? 0.04 : 0.06;
 		} else {
 			cam.near = 0.3;
 			if (md.wheel) c.dist = THREE.MathUtils.clamp(c.dist * (1 + md.wheel * 0.1), cfg.chase.dist * 0.4, cfg.chase.dist * 6);
@@ -1049,6 +1059,7 @@ class Game {
 		// live avionics: full rate in the cockpit, a trickle otherwise
 		if (this.state === 'flying' && this.model && this.fm && this.model.cockpit.userData.instruments) {
 			const ins = this.model.cockpit.userData.instruments;
+			const cabIns = this.model.cabin && this.view === 'cabin' ? this.model.cabin.userData.instruments : null;
 			const tel = this.fm.tel;
 			const hd = tel.heading;
 			this.turnRate = THREE.MathUtils.lerp(this.turnRate || 0, ((((hd - (this.lastHdg ?? hd)) + 540) % 360) - 180) / Math.max(dt, 1e-3), Math.min(1, dt * 3));
@@ -1056,19 +1067,28 @@ class Game {
 			ins.setGain(THREE.MathUtils.clamp(0.75 / this.exposure, 0.04, 8));
 			const { ap, dist } = nearestAirport(this.fm.pos.x, this.fm.pos.z);
 			const wv = this.fm.windBase;
-			ins.update(this.paused ? 0 : dt, tel, {
+			const extra = {
 				cfg: this.cfg, approach: this.lastApproach, accelAlong: this.accelAlong, pos: this.fm.pos, mapImage: this.mapImage,
 				navText: `${ap.id} ${(dist / 1852).toFixed(1)}NM`, turnRate: this.turnRate, ap: this.autopilot,
 				wind: { dir: (Math.atan2(-wv.x, wv.z) * 180 / Math.PI + 360) % 360, kt: wv.length() * 1.94384 },
 				ndRange: tel.agl > 10000 ? 74000 : tel.agl > 3000 ? 37000 : 18500,
-			}, this.view === 'cockpit');
-			const lev = this.model.cockpit.userData.levers || [];
-			for (const l of lev) l.rotation.x = 0.35 - this.controls.throttle * 0.9;
+			};
+			// the airliner flight deck is invisible from outside: only refresh it when the crew view is up
+			if (this.view === 'cockpit' || this.cfg.category !== 'airliner') ins.update(this.paused ? 0 : dt, tel, extra, this.view === 'cockpit');
+			if (cabIns) { cabIns.setGain(THREE.MathUtils.clamp(0.6 / this.exposure, 0.04, 8)); cabIns.update(this.paused ? 0 : dt, tel, { ...extra, ndRange: 148000 }, true); }
 		}
 		if (this.state === 'flying' && this.fm) this.updateFCU();
-		if (this.model && this.model.cockpit.userData.glow) {
-			const gi = Math.min(0.6, 0.05 / Math.max(this.exposure, 0.05));
-			for (const mat of this.model.cockpit.userData.glow) mat.emissiveIntensity = gi;
+		if (this.model) {
+			// interior lighting: bounce light from the windows (scaled to the eye's adaptation), integral panel
+			// lighting that shows up as the daylight fades, and how much direct sun reaches inside
+			const day = sstep(this.atm.sunDir.y, -0.12, 0.25);
+			const ex = Math.max(this.exposure, 1e-4);
+			interiorLight.uBounce.value = (0.03 + 0.22 * day * Math.max(0.35, this.cloudShadow)) / ex;
+			interiorLight.uSunK.value = this.view === 'cabin' || this.cfg.category === 'airliner' ? 0.3 : 0.85;
+			const gi = (1 - day * 0.85) * Math.min(2, 0.05 / ex);
+			for (const grp of [this.model.cockpit, this.model.cabin]) {
+				if (grp && grp.userData.glow) for (const mat of grp.userData.glow) mat.emissiveIntensity = gi;
+			}
 		}
 		const wdir = this.settings.windDir * Math.PI / 180;
 		this.airports.update(this.time, this.atm.night, wdir, this.settings.windSpeed / 1.94384, this.camera, this.pxHeight);
@@ -1105,7 +1125,7 @@ class Game {
 					challenge.screen = { x: (pn.x * 0.5 + 0.5) * W, y: (0.5 - pn.y * 0.5) * Hh, behind, dist: st.target.distanceTo(fm.pos), r: (this.challenge.P?.R || 30) / Math.max(-pc.z, 1) * ppd };
 				}
 			}
-			this.hud.draw(fm.crashed ? null : tel, {
+			this.hud.draw(fm.crashed || this.view === 'cabin' ? null : tel, {
 				challenge, mapMarks,
 				dt, fov: this.camera.fov, cfg: this.cfg, throttle: this.controls.throttle, time: this.time, paused: this.paused,
 				velBody, accelAlong: this.accelAlong, pos: fm.pos, approach: (this.lastApproach = computeApproach(fm.pos, tel.heading)),

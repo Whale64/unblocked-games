@@ -42,6 +42,20 @@ It needs no server, no install and no network access, so it works offline, from 
 - **Effects**: wingtip vortices, vapour, contrails above 7.8 km, tyre smoke on touchdown, explosions and water splashes.
 - **Time of day**: the sun position is computed for a mid-latitude location. Nights have stars, a moon and runway lights.
 
+### Cockpits and cabin
+- **Airliner flight decks (A320neo, 737 MAX 8)**:
+  - extruded windshield and side-window frames with tinted, reflective glass
+  - glareshield with a live FCU / MCP that shows the autopilot's real targets and mode lights, plus EFIS panels and master warning / caution lights
+  - six display units with the captain and first officer sides mirrored, including a live lower ECAM / EICAS wheel page and a standby instrument
+  - overhead panel with system pushbuttons or toggle switches and annunciators
+  - pedestal with two live MCDUs, thrust, speed-brake and flap levers, trim wheels and radio panels
+  - sidesticks (A320) or yokes (737), tillers, rudder pedals, seats with sheepskins, and a first officer
+- **Fighter**: three multifunction displays framed by option-select buttons, an up-front controller with a live scratchpad, HUD combiner glasses, switch consoles, throttle, centre stick, ejection seat, canopy arches and rear-view mirrors.
+- **Trainer**: recessed round gauges with bezels and glass, a radio stack (COM / NAV, GPS strip, transponder), switch row, circuit breakers, throttle / propeller / mixture quadrant, wet compass, harness and canopy arch.
+- **Everything moves**: the stick or yoke, rudder pedals, thrust, flap and speed-brake levers, gear lever and trim wheels all follow the controls.
+- **Lighting**: panel labels are painted procedurally with engraved relief and integral backlighting that comes up at dusk, and interior bounce lighting follows the daylight.
+- **Passenger cabin (`F6`, airliners)**: a window seat over the wing with deep window reveals and shades, overhead bins, passenger service units, LED ceiling strips, 3 + 3 seat rows with passengers, and a live moving map on the seat-back screen.
+
 ### Avionics and HUD
 - Conformal pitch ladder, flight-path vector with energy caret, and slip indicator.
 - Speed tape with V-speed bands and a trend vector, altitude tape with radar altitude, and a vertical speed indicator.
@@ -98,7 +112,7 @@ Sound is synthesised live with WebAudio:
 | Brakes / parking brake | `Space` or `B` / `Shift`+`B` |
 | Speed brake | `Y` |
 | Trim | `,` `.` |
-| Camera | `C` cycle, `V` cockpit, `F1` to `F5`; drag the mouse to look, scroll to zoom |
+| Camera | `C` cycle, `V` cockpit, `F1` to `F5`, `F6` passenger seat (airliners); drag the mouse to look, scroll to zoom |
 | Mouse yoke | `M` |
 | Autopilot / autothrottle | `U` / `Shift`+`U` |
 | Approach / autoland | `O` |
