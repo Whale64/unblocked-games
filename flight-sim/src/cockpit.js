@@ -153,13 +153,15 @@ function facePanel(w, h, d, faceMat, sideMat, r = 0.006) {
 
 // Surface patch spanned by four corners (bilinear) with holes, extruded by `thick` along its normal.
 // shape/holes are in normalized (u, v) space.
-function patchFrame(c00, c10, c01, c11, holes, thick, mat, curveSegs = 10) {
+function patchFrame(c00, c10, c01, c11, holes, thick, mat, curveSegs = 10, inside = null) {
 	const outer = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(1, 0), new THREE.Vector2(1, 1), new THREE.Vector2(0, 1)]);
 	for (const h of holes) outer.holes.push(new THREE.Path(h.map(([u, v]) => new THREE.Vector2(u, v))));
 	const geo = new THREE.ExtrudeGeometry(outer, { depth: 1, bevelEnabled: false, curveSegments: curveSegs });
 	const p = geo.attributes.position;
 	const A = new THREE.Vector3(), B = new THREE.Vector3(), n = new THREE.Vector3();
 	n.subVectors(c10, c00).cross(new THREE.Vector3().subVectors(c01, c00)).normalize();
+	// extrude away from `inside` (the depth of the frame goes out through the skin, not into the room)
+	if (inside && n.dot(new THREE.Vector3().subVectors(inside, c00)) < 0) n.negate();
 	for (let i = 0; i < p.count; i++) {
 		const u = p.getX(i), v = p.getY(i), w = p.getZ(i);
 		A.copy(c00).lerp(c10, u); B.copy(c01).lerp(c11, u);
@@ -949,13 +951,13 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 			const xa = s * sideAt(yw0 - 0.05) * 0.985, xb = s * sideAt(yw1 + 0.05) * 0.985;
 			const c00 = V(xa, yw0, z + winPitch), c10 = V(xa, yw0, z), c01 = V(xb, yw1, z + winPitch), c11 = V(xb, yw1, z);
 			const pts = s < 0 ? [c10, c00, c11, c01] : [c00, c10, c01, c11];
-			root.add(patchFrame(pts[0], pts[1], pts[2], pts[3], [winPath(0.29, 0.26, 0.71, 0.78, 0.2, 0.21)], 0.13, liner, 14));
+			root.add(patchFrame(pts[0], pts[1], pts[2], pts[3], [winPath(0.31, 0.29, 0.69, 0.77, 0.18, 0.19)], 0.1, liner, 14, V(0, yw0 + 0.4, z + winPitch / 2)));
 			// window shade, mostly raised
-			const sh = add(root, new THREE.PlaneGeometry(winPitch * 0.48, 0.08), shade, (xa + xb) / 2 - s * 0.015, yw1 - 0.13, z + winPitch / 2, 0, s * -Math.PI / 2 + (s < 0 ? Math.PI : 0), 0);
+			const sh = add(root, new THREE.PlaneGeometry(winPitch * 0.4, 0.07), shade, (xa + xb) / 2 + s * 0.05, yw0 + 0.74 * (yw1 - yw0), z + winPitch / 2, 0, Math.PI / 2, 0);
 			void sh;
 			// outer pane
-			const g0 = V(s * (Math.abs(xa) + 0.12), yw0 + 0.18, z + winPitch * 0.74), g1 = V(s * (Math.abs(xa) + 0.12), yw0 + 0.18, z + winPitch * 0.26);
-			const g2 = V(s * (Math.abs(xb) + 0.12), yw1 - 0.16, z + winPitch * 0.74), g3 = V(s * (Math.abs(xb) + 0.12), yw1 - 0.16, z + winPitch * 0.26);
+			const g0 = V(s * (Math.abs(xa) + 0.09), yw0 + 0.2, z + winPitch * 0.72), g1 = V(s * (Math.abs(xa) + 0.09), yw0 + 0.2, z + winPitch * 0.28);
+			const g2 = V(s * (Math.abs(xb) + 0.09), yw1 - 0.17, z + winPitch * 0.72), g3 = V(s * (Math.abs(xb) + 0.09), yw1 - 0.17, z + winPitch * 0.28);
 			const gp = glassPatch(g0, g1, g2, g3);
 			gp.material.opacity = 0.1;
 			root.add(gp); glassPanes.push(gp);
@@ -1026,7 +1028,7 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 		instruments = createAvionics(cfg, [{ type: 'nd', res: [512, 512], hz: 4, mounts: [{ parent: ife, x: 0, y: 0.12, z: -0.079, w: 0.185, h: 0.118, ry: Math.PI }] }]);
 	}
 	finishInterior(root);
-	const eye = [seatXs[0] + 0.04, floorY + 1.15, seatZ + 0.12];
+	const eye = [seatXs[0] + 0.12, floorY + 1.15, seatZ + 0.2];
 	root.userData = { instruments, glow, eye, kind: 'cabin' };
 	return root;
 }

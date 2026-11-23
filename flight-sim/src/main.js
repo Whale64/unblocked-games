@@ -473,7 +473,7 @@ class Game {
 		for (const [k, v] of [['F1', 'cockpit'], ['F2', 'chase'], ['F3', 'orbit'], ['F4', 'flyby'], ['F5', 'tower'], ['F6', 'cabin']]) if (c.hit(k)) {
 			if (v === 'cabin' && !(this.model && this.model.cabin)) { this.hud.toast('Passenger view is available in the airliners', '#ffc048', 2); continue; }
 			this.view = v; this.cam.flyby = null;
-			if (v === 'cabin') { this.cam.headYaw = 1.2; this.cam.headPitch = -0.12; }
+			if (v === 'cabin') { this.cam.headYaw = 1.0; this.cam.headPitch = -0.1; }
 		}
 		if (c.hit('KeyI')) this.hud.visible = !this.hud.visible;
 		if (c.hit('KeyG') && cfg.retractable) {
@@ -830,7 +830,7 @@ class Game {
 		const cabinView = this.view === 'cabin' && this.model && this.model.cabin;
 		if (this.view === 'cockpit' || cabinView) {
 			const lk = this.controls.look;
-			const rest = cabinView ? [1.2, -0.12] : [0, 0];
+			const rest = cabinView ? [1.0, -0.1] : [0, 0];
 			if (lk.x || lk.y) { c.headYaw -= lk.x * dt * 1.9; c.headPitch += lk.y * dt * 1.3; c.idle = 0; }
 			else if (md.dx || md.dy) { c.headYaw -= md.dx * 0.004; c.headPitch -= md.dy * 0.004; c.idle = 0; } else c.idle += dt;
 			c.headYaw = THREE.MathUtils.clamp(c.headYaw, -2.6, 2.6);
