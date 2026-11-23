@@ -208,9 +208,9 @@ function person(shirt, trousers, skin, hair, opts = {}) {
 		return m;
 	};
 	// torso (slightly reclined), shoulders, hips
-	const torso = add(g, new THREE.CapsuleGeometry(0.15, 0.32, 6, 14), sh, 0, 0.44, 0.03, -0.1);
+	const torso = add(g, new THREE.CapsuleGeometry(0.15, 0.32, 6, 14), sh, 0, 0.44, 0.05, 0.1);
 	torso.scale.set(1.05, 1, 0.68);
-	add(g, rbox(0.38, 0.12, 0.22, 0.05, 3), sh, 0, 0.62, 0.04, -0.1);
+	add(g, rbox(0.38, 0.12, 0.22, 0.05, 3), sh, 0, 0.62, 0.07, 0.1);
 	add(g, rbox(0.34, 0.14, 0.26, 0.06, 3), tr, 0, 0.12, 0.02);
 	// neck, head, hair, ears, nose
 	add(g, new THREE.CylinderGeometry(0.048, 0.055, 0.1, 12), sk, 0, 0.72, 0.03);
@@ -257,8 +257,8 @@ function seat(cushion, frame, opts = {}) {
 	const g = new THREE.Group();
 	const w = opts.w || 0.5;
 	add(g, rbox(w, 0.12, 0.5, 0.05, 3), cushion, 0, 0, 0); // pan
-	const back = add(g, rbox(w * 0.96, 0.75, 0.13, 0.05, 3), cushion, 0, 0.42, 0.24, -0.12);
-	if (opts.headrest !== false) add(g, rbox(w * 0.6, 0.2, 0.12, 0.05, 3), cushion, 0, 0.9, 0.33, -0.12);
+	const back = add(g, rbox(w * 0.96, 0.75, 0.13, 0.05, 3), cushion, 0, 0.42, 0.24, 0.12); // reclined backwards
+	if (opts.headrest !== false) add(g, rbox(w * 0.6, 0.2, 0.12, 0.05, 3), cushion, 0, 0.9, 0.3, 0.12);
 	if (opts.arms) for (const s of [-1, 1]) add(g, rbox(0.06, 0.06, 0.38, 0.02), frame, s * (w / 2 + 0.03), 0.2, 0.02);
 	add(g, new THREE.CylinderGeometry(0.05, 0.07, 0.4, 10), frame, 0, -0.25, 0.05);
 	g.userData.back = back;
@@ -623,7 +623,7 @@ export function buildAirlinerDeck(cfg, withAvionics = true) {
 	for (const px of [0, 2 * cx]) {
 		const st = seat(cush, seatFrame, { arms: true, w: 0.52 });
 		st.position.set(px, -0.86, 0.22);
-		add(st, rbox(0.46, 0.6, 0.03, 0.03, 2), sheep, 0, 0.42, 0.17, -0.12);
+		add(st, rbox(0.46, 0.6, 0.03, 0.03, 2), sheep, 0, 0.42, 0.17, 0.12);
 		root.add(st);
 	}
 	const fo = person(0xb9c6d4, 0x1b2230, 0xd9a888, 0x3a2a1e, { headset: true, epaulettes: true, tie: 0x1a2440, pose: 'armrest' });
@@ -946,8 +946,11 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 	const yw0 = floorY + 0.62, yw1 = floorY + 1.42;
 	const shade = imat(0xf4f3ef, 0.7, 0, { side: THREE.DoubleSide });
 	const glassPanes = [];
+	// windows are laid out from the passenger's own window outwards, so one sits right beside the seat
+	const eyeZ = seatZ + 0.02, winCentre = eyeZ - 0.06;
+	const zWin0 = winCentre - winPitch / 2 - Math.ceil((winCentre - z0) / winPitch) * winPitch;
 	for (const s of [-1, 1]) {
-		for (let z = z0; z < z1; z += winPitch) {
+		for (let z = zWin0; z < z1; z += winPitch) {
 			const xa = s * sideAt(yw0 - 0.05) * 0.985, xb = s * sideAt(yw1 + 0.05) * 0.985;
 			const c00 = V(xa, yw0, z + winPitch), c10 = V(xa, yw0, z), c01 = V(xb, yw1, z + winPitch), c11 = V(xb, yw1, z);
 			const pts = s < 0 ? [c10, c00, c11, c01] : [c00, c10, c01, c11];
@@ -1030,7 +1033,7 @@ export function buildCabin(cfg, fusR, withAvionics = true) {
 		instruments = createAvionics(cfg, [{ type: 'nd', res: [512, 512], hz: 4, mounts: [{ parent: ife, x: 0, y: 0.12, z: 0.0795, w: 0.185, h: 0.118 }] }]);
 	}
 	finishInterior(root);
-	const eye = [seatXs[0] + 0.12, floorY + 1.15, seatZ + 0.2];
+	const eye = [seatXs[0] + 0.1, floorY + 1.14, eyeZ];
 	root.userData = { instruments, glow, eye, kind: 'cabin' };
 	return root;
 }
