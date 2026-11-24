@@ -1,0 +1,16 @@
+{
+  "name": "brava-bay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Brava Bay: an open-world crime sandbox for the browser (single-file build)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "shot": "node tools/shot.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0",
+    "three": "0.180.0"
+  }
+}
