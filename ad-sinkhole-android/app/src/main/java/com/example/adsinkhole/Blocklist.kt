@@ -33,15 +33,24 @@ object Blocklist {
     @Volatile
     private var loaded = false
 
-    @Synchronized
+    // Separate locks: loading (needed by the VPN) must never wait for a slow download.
+    private val loadLock = Any()
+    private val updateLock = Any()
+
+    /**
+     * Reads the saved list from disk. Parsing hundreds of thousands of lines is slow, so call
+     * this from a background thread, never from the UI thread.
+     */
     fun ensureLoaded(context: Context) {
-        if (loaded) return
-        loaded = true
-        val file = File(context.applicationContext.filesDir, FILE_NAME)
-        if (file.exists()) {
-            domains = file.bufferedReader().useLines { lines ->
-                lines.filter { it.isNotBlank() }.toHashSet()
+        synchronized(loadLock) {
+            if (loaded) return
+            val file = File(context.applicationContext.filesDir, FILE_NAME)
+            if (file.exists()) {
+                domains = file.bufferedReader().useLines { lines ->
+                    lines.filter { it.isNotBlank() }.toHashSet()
+                }
             }
+            loaded = true
         }
     }
 
@@ -53,9 +62,8 @@ object Blocklist {
      * does not abort the update; it is reported in [UpdateResult.failures].
      * Must be called off the main thread.
      */
-    @Synchronized
     @Throws(IOException::class)
-    fun update(context: Context): UpdateResult {
+    fun update(context: Context): UpdateResult = synchronized(updateLock) {
         val app = context.applicationContext
         val collected = HashSet<String>(600_000)
         val failures = mutableListOf<String>()
@@ -82,8 +90,9 @@ object Blocklist {
         if (!tmp.renameTo(target)) throw IOException("Could not save block list")
 
         domains = collected
+        loaded = true
         Settings.recordUpdate(app, collected.size)
-        return UpdateResult(collected.size, failures)
+        UpdateResult(collected.size, failures)
     }
 
     private fun download(url: String, into: MutableSet<String>) {
@@ -91,7 +100,7 @@ object Blocklist {
         try {
             conn.connectTimeout = 15_000
             conn.readTimeout = 30_000
-            conn.setRequestProperty("User-Agent", "AdSinkhole/1.0")
+            conn.setRequestProperty("User-Agent", "ZeroAd/1.0")
             if (conn.responseCode != HttpURLConnection.HTTP_OK) {
                 throw IOException("HTTP ${conn.responseCode}")
             }

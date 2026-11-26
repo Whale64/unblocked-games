@@ -114,8 +114,6 @@ class AdBlockVpnService : VpnService() {
     private fun startTunnel() {
         if (isRunning) return
 
-        Blocklist.ensureLoaded(this)
-        Stats.load(this)
         loadAllowlist()
         upstreams = Settings.upstreamServers(this).mapNotNull {
             runCatching { InetAddress.getByName(it) }.getOrNull()
@@ -142,17 +140,22 @@ class AdBlockVpnService : VpnService() {
         isRunning = true
         mainHandler.postDelayed(statsFlusher, STATS_FLUSH_INTERVAL_MS)
 
-        reader = Thread({ readLoop(FileInputStream(pfd.fileDescriptor)) }, "dns-tunnel").also { it.start() }
-
-        if (Settings.autoUpdate(this) && Blocklist.isStale(this)) {
-            Thread {
-                try {
-                    Blocklist.update(applicationContext)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Automatic blocklist update failed", e)
-                }
-            }.start()
-        }
+        // All slow work happens on the reader thread, so the UI thread never waits on it.
+        // Until the list finishes loading, queries are forwarded unblocked.
+        reader = Thread({
+            Blocklist.ensureLoaded(applicationContext)
+            Stats.load(applicationContext)
+            if (Settings.autoUpdate(applicationContext) && Blocklist.isStale(applicationContext)) {
+                Thread {
+                    try {
+                        Blocklist.update(applicationContext)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Automatic blocklist update failed", e)
+                    }
+                }.start()
+            }
+            readLoop(FileInputStream(pfd.fileDescriptor))
+        }, "dns-tunnel").also { it.start() }
     }
 
     private fun readLoop(input: FileInputStream) {
