@@ -14,6 +14,10 @@ object Blocklist {
         "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
         // Unified hosts: ads, trackers and malware
         "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+        // HaGeZi Multi PRO: broad ads, tracking, telemetry, malware and scam coverage
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt",
+        // OISD Big: large general-purpose ad and tracker list
+        "https://big.oisd.nl/",
     )
 
     private const val FILE_NAME = "blocklist.txt"
@@ -53,7 +57,7 @@ object Blocklist {
     @Throws(IOException::class)
     fun update(context: Context): UpdateResult {
         val app = context.applicationContext
-        val collected = HashSet<String>(300_000)
+        val collected = HashSet<String>(600_000)
         val failures = mutableListOf<String>()
 
         for (url in SOURCES) {

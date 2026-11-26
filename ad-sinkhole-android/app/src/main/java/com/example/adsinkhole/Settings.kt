@@ -9,8 +9,16 @@ object Settings {
     private const val KEY_UPSTREAM = "upstream"
     private const val KEY_LAST_UPDATED = "lastUpdated"
     private const val KEY_DOMAIN_COUNT = "domainCount"
+    private const val KEY_AUTO_UPDATE = "autoUpdate"
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Auto-update is on by default: the block lists refresh every 7 days. */
+    fun autoUpdate(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTO_UPDATE, true)
+
+    fun setAutoUpdate(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_UPDATE, enabled).apply()
+    }
 
     fun allowlistText(context: Context): String = prefs(context).getString(KEY_ALLOWLIST, "") ?: ""
 

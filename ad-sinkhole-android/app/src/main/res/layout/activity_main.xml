@@ -46,6 +46,13 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp" />
 
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/autoUpdateSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Auto-update every 7 days" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/updateButton"
             style="?attr/materialButtonOutlinedStyle"

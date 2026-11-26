@@ -43,6 +43,12 @@ class MainActivity : AppCompatActivity() {
         setContentView(ui.root)
 
         ui.allowlistInput.setText(Settings.allowlistText(this))
+        ui.autoUpdateSwitch.isChecked = Settings.autoUpdate(this)
+        ui.autoUpdateSwitch.setOnCheckedChangeListener { _, checked ->
+            Settings.setAutoUpdate(this, checked)
+            AutoUpdate.apply(this)
+        }
+        AutoUpdate.apply(this)
         ui.toggleButton.setOnClickListener {
             if (AdBlockVpnService.isRunning) stopShield() else requestStart()
         }

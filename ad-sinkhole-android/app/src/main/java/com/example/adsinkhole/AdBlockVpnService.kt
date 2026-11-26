@@ -137,7 +137,7 @@ class AdBlockVpnService : VpnService() {
 
         reader = Thread({ readLoop(FileInputStream(pfd.fileDescriptor)) }, "dns-tunnel").also { it.start() }
 
-        if (Blocklist.isStale(this)) {
+        if (Settings.autoUpdate(this) && Blocklist.isStale(this)) {
             Thread {
                 try {
                     Blocklist.update(applicationContext)

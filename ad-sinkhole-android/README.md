@@ -24,9 +24,12 @@ app wants ads.example.com
   slowed down or inspected.
 - A domain on the list also blocks its subdomains. For example, `ads.example.com`
   is blocked when `example.com` is listed.
-- Lists are downloaded from public sources (AdGuard DNS filter and StevenBlack
-  unified hosts) and cached on the device. They refresh automatically after
-  7 days.
+- Blocking uses four public lists merged together (about 526,000 unique
+  domains): AdGuard DNS filter, StevenBlack unified hosts, HaGeZi Multi PRO
+  and OISD Big. The merged list is cached on the device.
+- **Auto-update** (on by default) refreshes the lists every 7 days using
+  WorkManager. It waits for a network connection and survives reboots. Turn it
+  off with the switch in the app. Manual updates still work either way.
 - Allowlist entries are never blocked, including their subdomains.
 
 ## Build
@@ -43,8 +46,8 @@ Open the folder in Android Studio and press Run to install on a device.
 
 ## Using it
 
-1. Open **Ad Sinkhole** and tap **Update lists**. This is required once, and
-   it runs automatically on first start as well.
+1. Open **Ad Sinkhole** and tap **Update lists**. The lists also download on
+   first start, and the 7-day auto-update keeps them current after that.
 2. Tap **Start protection** and accept the VPN prompt. A key icon appears in the
    status bar while the VPN is active.
 3. Add domains that break sites to the allowlist and tap **Save allowlist**.
@@ -85,4 +88,5 @@ app/src/test/           JVM unit tests for the codec and parser
 ```
 
 The upstream resolvers are set in `Settings.upstreamServers` (default
-`1.1.1.1,8.8.8.8`). The block-list sources are in `Blocklist.SOURCES`.
+`1.1.1.1,8.8.8.8`). The block-list sources are in `Blocklist.SOURCES`. The
+7-day schedule lives in `AutoUpdate.kt`.
