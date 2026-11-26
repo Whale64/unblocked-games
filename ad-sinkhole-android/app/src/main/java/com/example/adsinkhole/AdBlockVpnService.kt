@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.io.FileInputStream
@@ -17,7 +19,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * DNS-level ad blocker built on VpnService.
@@ -31,7 +32,7 @@ import java.util.concurrent.atomic.AtomicLong
 class AdBlockVpnService : VpnService() {
 
     companion object {
-        private const val TAG = "AdSinkholeVpn"
+        private const val TAG = "ZeroAdVpn"
 
         const val ACTION_START = "com.example.adsinkhole.START"
         const val ACTION_STOP = "com.example.adsinkhole.STOP"
@@ -43,18 +44,17 @@ class AdBlockVpnService : VpnService() {
         private const val NOTIFICATION_ID = 1
         private const val UPSTREAM_TIMEOUT_MS = 4000
         private const val FORWARDER_THREADS = 8
+        private const val STATS_FLUSH_INTERVAL_MS = 10_000L
 
         @Volatile
         var isRunning = false
             private set
-
-        val blockedCount = AtomicLong()
-        val forwardedCount = AtomicLong()
     }
 
     private val fakeDnsBytes: ByteArray by lazy { InetAddress.getByName(FAKE_DNS).address }
     private val forwarder: ExecutorService = Executors.newFixedThreadPool(FORWARDER_THREADS)
     private val writeLock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var tunnel: ParcelFileDescriptor? = null
     private var tunnelOut: FileOutputStream? = null
@@ -65,6 +65,13 @@ class AdBlockVpnService : VpnService() {
 
     @Volatile
     private var upstreams: List<InetAddress> = emptyList()
+
+    private val statsFlusher = object : Runnable {
+        override fun run() {
+            Stats.flush(this@AdBlockVpnService)
+            if (isRunning) mainHandler.postDelayed(this, STATS_FLUSH_INTERVAL_MS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -108,6 +115,7 @@ class AdBlockVpnService : VpnService() {
         if (isRunning) return
 
         Blocklist.ensureLoaded(this)
+        Stats.load(this)
         loadAllowlist()
         upstreams = Settings.upstreamServers(this).mapNotNull {
             runCatching { InetAddress.getByName(it) }.getOrNull()
@@ -131,9 +139,8 @@ class AdBlockVpnService : VpnService() {
 
         tunnel = pfd
         tunnelOut = FileOutputStream(pfd.fileDescriptor)
-        blockedCount.set(0)
-        forwardedCount.set(0)
         isRunning = true
+        mainHandler.postDelayed(statsFlusher, STATS_FLUSH_INTERVAL_MS)
 
         reader = Thread({ readLoop(FileInputStream(pfd.fileDescriptor)) }, "dns-tunnel").also { it.start() }
 
@@ -163,7 +170,7 @@ class AdBlockVpnService : VpnService() {
                 when {
                     BlocklistParser.isListed(query.name, allowlist) -> forward(dgram, query)
                     BlocklistParser.isListed(query.name, Blocklist.domains) -> {
-                        blockedCount.incrementAndGet()
+                        Stats.recordBlocked(query.name)
                         reply(
                             dgram,
                             DnsCodec.buildDnsError(dgram.payload, query.questionEnd, DnsCodec.RCODE_NXDOMAIN),
@@ -183,7 +190,7 @@ class AdBlockVpnService : VpnService() {
     }
 
     private fun forward(req: DnsCodec.UdpDatagram, query: DnsCodec.DnsQuery) {
-        forwardedCount.incrementAndGet()
+        Stats.recordAllowed()
         forwarder.execute {
             val answer = queryUpstream(req.payload)
                 ?: DnsCodec.buildDnsError(req.payload, query.questionEnd, DnsCodec.RCODE_SERVFAIL)
@@ -227,6 +234,8 @@ class AdBlockVpnService : VpnService() {
 
     private fun stopTunnel() {
         isRunning = false
+        mainHandler.removeCallbacks(statsFlusher)
+        Stats.flush(this)
         synchronized(writeLock) { tunnelOut = null }
         try {
             tunnel?.close()

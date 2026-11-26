@@ -1,4 +1,4 @@
-# Ad Sinkhole
+# ZeroAd
 
 A system-wide ad blocker for Android, with no root required. It works the way
 AdAway and Pi-hole's DNS mode work: a local VPN slot intercepts DNS lookups,
@@ -46,11 +46,14 @@ Open the folder in Android Studio and press Run to install on a device.
 
 ## Using it
 
-1. Open **Ad Sinkhole** and tap **Update lists**. The lists also download on
+1. Open **ZeroAd** and tap **Update lists**. The lists also download on
    first start, and the 7-day auto-update keeps them current after that.
 2. Tap **Start protection** and accept the VPN prompt. A key icon appears in the
    status bar while the VPN is active.
 3. Add domains that break sites to the allowlist and tap **Save allowlist**.
+4. See how much has been blocked from the menu (⋮) → **Statistics**. The total
+   is exact. The ads/trackers split is estimated from domain names, because the
+   block lists don't label their entries. **Reset statistics** is in the same menu.
 
 ## Limitations (please read)
 
@@ -83,7 +86,9 @@ app/src/main/java/com/example/adsinkhole/
   BlocklistParser.kt    hosts / domain / AdBlock-rule parsing, suffix matching
   Blocklist.kt          Downloads, stores and serves the blocked-domain set
   Settings.kt           SharedPreferences: allowlist, upstream DNS, update time
-  MainActivity.kt       Start/stop, stats, list update, allowlist editor
+  MainActivity.kt       Start/stop, list update, allowlist editor, overflow menu
+  StatsActivity.kt      Cumulative blocked/allowed statistics screen
+  Stats.kt              Persisted block counters and ads/trackers classifier
 app/src/test/           JVM unit tests for the codec and parser
 ```
 

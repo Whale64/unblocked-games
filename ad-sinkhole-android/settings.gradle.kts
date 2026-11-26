@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AdSinkhole"
+rootProject.name = "ZeroAd"
 include(":app")

@@ -1,6 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Ad Sinkhole</string>
+    <string name="app_name">ZeroAd</string>
     <string name="notification_channel">Protection status</string>
-    <string name="notification_running">Blocking ads for apps on this device</string>
+    <string name="notification_running">Blocking ads and trackers on this device</string>
+    <string name="menu_statistics">Statistics</string>
+    <string name="menu_reset_statistics">Reset statistics</string>
+    <string name="reset_title">Reset statistics?</string>
+    <string name="reset_message">This clears the blocked and allowed counts. Protection is not affected.</string>
+    <string name="reset_confirm">Reset</string>
+    <string name="cancel">Cancel</string>
+    <string name="statistics_title">Statistics</string>
+    <string name="stat_total_label">Ads and trackers blocked</string>
+    <string name="stat_total_caption">Everything ZeroAd has stopped since you first turned it on</string>
+    <string name="stat_ads">Ads (estimated)</string>
+    <string name="stat_trackers">Trackers (estimated)</string>
+    <string name="stat_other">Other blocked domains</string>
+    <string name="stat_allowed">Requests allowed through</string>
+    <string name="stat_note">The block lists don\'t label entries as ads or trackers, so the ad and tracker split is a best guess from domain names. The total is exact.</string>
 </resources>

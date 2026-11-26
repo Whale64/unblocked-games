@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorSurface"
+        app:title="@string/statistics_title" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="24dp">
+
+                    <TextView
+                        style="?attr/textAppearanceLabelLarge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/stat_total_label" />
+
+                    <TextView
+                        android:id="@+id/totalValue"
+                        style="?attr/textAppearanceDisplayMedium"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="0" />
+
+                    <TextView
+                        style="?attr/textAppearanceBodySmall"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/stat_total_caption" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="24dp"
+                    android:paddingVertical="8dp">
+
+                    <LinearLayout style="@style/StatRow">
+                        <TextView style="@style/StatLabel" android:text="@string/stat_ads" />
+                        <TextView android:id="@+id/adsValue" style="@style/StatValue" />
+                    </LinearLayout>
+
+                    <LinearLayout style="@style/StatRow">
+                        <TextView style="@style/StatLabel" android:text="@string/stat_trackers" />
+                        <TextView android:id="@+id/trackersValue" style="@style/StatValue" />
+                    </LinearLayout>
+
+                    <LinearLayout style="@style/StatRow">
+                        <TextView style="@style/StatLabel" android:text="@string/stat_other" />
+                        <TextView android:id="@+id/otherValue" style="@style/StatValue" />
+                    </LinearLayout>
+
+                    <LinearLayout style="@style/StatRow">
+                        <TextView style="@style/StatLabel" android:text="@string/stat_allowed" />
+                        <TextView android:id="@+id/allowedValue" style="@style/StatValue" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                style="?attr/textAppearanceBodySmall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/stat_note" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>
